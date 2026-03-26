@@ -1,0 +1,4 @@
+psutil
+anthropic
+python-dotenv
+requests
