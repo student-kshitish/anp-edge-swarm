@@ -8,11 +8,14 @@ import logging
 from bus.message_bus import bus
 from core.agent_registry import get_agent_for
 from core.decision_agent import make_decision
+from agent_factory.factory import AgentFactory
 
 logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_ID = "orchestrator"
 COLLECT_SECONDS = 10
+
+factory = AgentFactory()
 
 
 def run_intent(intent: dict, use_llm: bool = True) -> dict:
@@ -41,12 +44,9 @@ def run_intent(intent: dict, use_llm: bool = True) -> dict:
     # Subscribe orchestrator to the bus (idempotent)
     bus.subscribe(ORCHESTRATOR_ID)
 
-    # Spawn agents
-    agents = []
-    for sensor_type in data_required:
-        agent = get_agent_for(sensor_type, report_to=ORCHESTRATOR_ID)
-        agent.start()
-        agents.append(agent)
+    # Spawn agents via factory
+    agents = factory.create_from_intent(intent)
+    for agent in agents:
         print(f"[Orchestrator] Started agent: {agent.agent_id}")
 
     # Collect readings for COLLECT_SECONDS
@@ -95,6 +95,8 @@ def run_intent(intent: dict, use_llm: bool = True) -> dict:
     print("=" * 60)
     print(decision)
     print("=" * 60)
+
+    print(f"\n[FACTORY] Status: {factory.status()}")
 
     return {"summary": summary, "decision": decision}
 
