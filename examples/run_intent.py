@@ -35,12 +35,17 @@ logging.basicConfig(
 
 from core.intent_parser import parse_intent_llm
 from core.orchestrator import run_intent
+from swarm.discovery import start as start_discovery
+from swarm.task_distributor import distribute_tasks
 
 
 def main():
     print("=" * 60)
     print("  ANP-Edge Swarm — LLM Intent Orchestrator")
     print("=" * 60)
+
+    # Start discovery so we can see peers before distributing tasks
+    start_discovery()
 
     user_text = input("\nWhat do you want to check? ").strip()
     if not user_text:
@@ -51,10 +56,22 @@ def main():
     print()
     intent = parse_intent_llm(user_text)
 
-    # 2. Run the swarm pipeline
-    result = run_intent(intent, use_llm=True)
+    # 2. Distribute tasks across swarm nodes
+    plan = distribute_tasks(intent)
+    print(f"\n[SWARM] Local tasks:  {plan['local_tasks']}")
+    print(f"[SWARM] Remote tasks: {plan['remote_tasks']}")
 
-    # 3. Print the returned summary dict
+    # 3. Run orchestrator for local tasks only
+    local_intent = dict(intent)
+    local_intent["data_required"] = plan["local_tasks"]
+
+    if not plan["local_tasks"]:
+        print("\n[SWARM] All tasks offloaded to remote nodes — nothing to run locally.")
+        return
+
+    result = run_intent(local_intent, use_llm=True)
+
+    # 4. Print the returned summary dict
     print("Returned summary dict:")
     for sensor, info in result["summary"].items():
         print(f"  {sensor}: {info['count']} reading(s), latest={info['latest']}")

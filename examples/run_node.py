@@ -10,8 +10,10 @@ import logging
 import threading
 
 from swarm.discovery import start as start_discovery, get_known_nodes
+from swarm.task_distributor import listen_for_tasks
 from bus.message_bus import bus
 from agents.sensor_agent import SensorAgent
+from core.agent_registry import get_agent_for
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,10 +44,25 @@ def aggregator_loop():
                 print(f"[{agent}]  Unknown reading: {data}", flush=True)
 
 
+def handle_task(task: dict) -> None:
+    """Callback invoked when the brain assigns a sensor task to this worker."""
+    sensor_type = task.get("sensor_type", "unknown")
+    print(f"[WORKER] Starting {sensor_type} agent for remote task", flush=True)
+    try:
+        agent = get_agent_for(sensor_type, report_to=AGGREGATOR_ID)
+        agent.start()
+    except ValueError as e:
+        logger.warning("[WORKER] Cannot start agent: %s", e)
+
+
 def main():
     # 1. Start UDP discovery
     start_discovery()
     logger.info("UDP discovery started — listening for peers...")
+
+    # 1b. Listen for tasks assigned by brain nodes
+    listen_for_tasks(handle_task)
+    logger.info("Task listener started — waiting for remote task assignments...")
 
     # 2. Subscribe aggregator before starting sensors (avoids race condition)
     bus.subscribe(AGGREGATOR_ID)
