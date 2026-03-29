@@ -1,5 +1,5 @@
 """
-examples/run_bootstrap.py — Run a DHT bootstrap node.
+examples/run_bootstrap.py — Run a Kademlia DHT bootstrap node.
 
 Anyone can run this to become a bootstrap entry point for the swarm.
 Other nodes pass this machine's IP with --bootstrap <ip> when starting.
@@ -17,7 +17,6 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from swarm.bootstrap_server import run
-import asyncio
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    run()

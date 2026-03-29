@@ -6,8 +6,9 @@ examples/run_node.py — Boot a swarm node:
   - aggregator subscribes to the bus and prints all incoming messages
 
 Usage:
-    python examples/run_node.py                     # use public BitTorrent bootstrap
-    python examples/run_node.py --bootstrap 1.2.3.4 # use private bootstrap node
+    python examples/run_node.py                            # standalone / no bootstrap
+    python examples/run_node.py --bootstrap 192.168.1.40   # use private bootstrap node
+    python examples/run_node.py --bootstrap 1.2.3.4 --port 6881
 """
 
 import argparse
@@ -130,16 +131,32 @@ def main():
         metavar="IP",
         default=None,
         help="IP of a bootstrap node to join the DHT swarm. "
-             "If omitted, uses public BitTorrent DHT bootstrap nodes.",
+             "If omitted, node starts in isolation (use static PEER_IPS for LAN).",
+    )
+    parser.add_argument(
+        "--port",
+        metavar="PORT",
+        type=int,
+        default=6881,
+        help="UDP port of the bootstrap node (default: 6881).",
     )
     args = parser.parse_args()
 
     # 1. Join Kademlia DHT (internet-wide peer discovery)
-    start_discovery(bootstrap_ip=args.bootstrap)
+    start_discovery(bootstrap_ip=args.bootstrap, bootstrap_port=args.port)
     if args.bootstrap:
-        logger.info("DHT discovery started — bootstrapping from %s", args.bootstrap)
+        logger.info("DHT discovery started — bootstrapping from %s:%s", args.bootstrap, args.port)
     else:
-        logger.info("DHT discovery started — using public BitTorrent bootstrap nodes")
+        logger.info("DHT discovery started — no bootstrap, waiting for peers via static IPs")
+
+    # Wait for DHT to populate before proceeding
+    logger.info("Waiting 8 s for DHT to populate...")
+    time.sleep(8)
+    peers = get_known_nodes()
+    if peers:
+        logger.info("DHT peers found (%d): %s", len(peers), list(peers.keys()))
+    else:
+        logger.info("No DHT peers found yet — will keep discovering in background")
 
     # 1b. Start TCP peer server + connect to known peers
     start_server()
