@@ -1,7 +1,10 @@
 """
 core/orchestrator.py — Spawns agents for each required sensor,
 collects readings from the bus for 10 seconds, merges any remote
-results that arrived from worker nodes, then runs the decision agent.
+results that arrived from worker nodes, then runs the ML pipeline
+(clean → anomaly → trend → history → action) distributed across
+known swarm nodes, and finally passes the assembled result to the
+decision agent.
 """
 
 import time
@@ -11,6 +14,11 @@ from core.agent_registry import get_agent_for
 from core.decision_agent import make_decision
 from agent_factory.factory import AgentFactory
 from swarm.result_collector import start_listening, wait_for_results
+from ml.stream_buffer import StreamBuffer
+from ml.task_decomposer import TaskDecomposer
+from ml.parallel_executor import ParallelExecutor
+from ml.result_assembler import ResultAssembler
+from ml.inference_server import start_server as start_inference_server
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +27,15 @@ COLLECT_SECONDS = 10
 
 factory = AgentFactory()
 
+# Sliding window buffer — shared across calls
+stream_buffer = StreamBuffer(maxlen=50)
+
 # Start the result-collector daemon once at import time.
 # It binds UDP port 50003 and receives TASK_RESULT packets from workers.
 start_listening()
+
+# Start the inference TCP server so this node can accept remote task requests.
+start_inference_server()
 
 
 def run_intent(intent: dict, use_llm: bool = True,
@@ -78,6 +92,11 @@ def run_intent(intent: dict, use_llm: bool = True,
     for agent in agents:
         agent.stop()
 
+    # Feed every collected reading into the sliding window buffer
+    for sensor, readings in collected.items():
+        for reading in readings:
+            stream_buffer.add(reading)
+
     # ------------------------------------------------------------------ #
     # Wait for remote results from worker nodes
     # ------------------------------------------------------------------ #
@@ -99,7 +118,7 @@ def run_intent(intent: dict, use_llm: bool = True,
                 _print_reading(sensor_type, data)
 
     # ------------------------------------------------------------------ #
-    # Build summary
+    # Build raw summary (for logging / decision agent fallback)
     # ------------------------------------------------------------------ #
     summary: dict[str, dict] = {}
     for sensor, readings in collected.items():
@@ -109,7 +128,7 @@ def run_intent(intent: dict, use_llm: bool = True,
             summary[sensor] = {"count": len(readings), "latest": readings[-1]}
 
     print("\n" + "=" * 60)
-    print("[Orchestrator] FINAL SUMMARY")
+    print("[Orchestrator] SENSOR SUMMARY")
     print("=" * 60)
     for sensor, info in summary.items():
         print(f"  {sensor:12s} — {info['count']} readings received")
@@ -117,7 +136,47 @@ def run_intent(intent: dict, use_llm: bool = True,
             print(f"               latest: {info['latest']}")
     print("=" * 60 + "\n")
 
-    decision = make_decision(summary, intent.get("goal", "site_check"))
+    # ------------------------------------------------------------------ #
+    # ML Pipeline — distribute tasks across swarm nodes
+    # ------------------------------------------------------------------ #
+    # Flatten the latest reading from each sensor into a single dict
+    latest_readings: dict = {}
+    for sensor, info in summary.items():
+        if info["latest"]:
+            latest_readings.update(info["latest"])
+
+    # Discover known nodes from the swarm (best-effort; returns empty dict
+    # when no peer discovery is available)
+    try:
+        from swarm.peer_discovery import get_known_nodes
+        known = get_known_nodes()
+    except Exception:
+        known = {}
+
+    if latest_readings:
+        decomposer = TaskDecomposer()
+        executor   = ParallelExecutor()
+        assembler  = ResultAssembler()
+
+        plan = decomposer.decompose(latest_readings, known)
+        print("[ML] Task plan:", {t: a["node_id"] for t, a in plan.items()})
+
+        window = stream_buffer.get_window()
+        ml_results = executor.execute(plan, latest_readings, window)
+
+        print("\n" + "=" * 60)
+        print("[ML] PIPELINE RESULTS")
+        print("=" * 60)
+        final = assembler.assemble(ml_results)
+        print("=" * 60 + "\n")
+    else:
+        final = {}
+
+    # ------------------------------------------------------------------ #
+    # Decision agent — receives ML final output (or raw summary as fallback)
+    # ------------------------------------------------------------------ #
+    decision_input = final if final else summary
+    decision = make_decision(decision_input, intent.get("goal", "site_check"))
     print("\n" + "=" * 60)
     print("[DECISION AGENT] Assessment")
     print("=" * 60)
@@ -126,7 +185,7 @@ def run_intent(intent: dict, use_llm: bool = True,
 
     print(f"\n[FACTORY] Status: {factory.status()}")
 
-    return {"summary": summary, "decision": decision}
+    return {"summary": summary, "ml_pipeline": final, "decision": decision}
 
 
 # ------------------------------------------------------------------ #
