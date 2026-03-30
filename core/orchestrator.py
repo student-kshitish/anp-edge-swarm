@@ -1,16 +1,15 @@
 """
 core/orchestrator.py — Spawns agents for each required sensor,
-collects readings from the bus for 10 seconds, merges any remote
-results that arrived from worker nodes, then runs the ML pipeline
-(clean → anomaly → trend → history → action) distributed across
-known swarm nodes, and finally passes the assembled result to the
-decision agent.
+collects readings from the bus adaptively, merges any remote
+results from worker nodes, then runs the ML pipeline distributed
+across known swarm nodes, and passes the assembled result to the
+decision agent (non-blocking).
 """
 
 import time
+import threading
 import logging
 from bus.message_bus import bus
-from core.agent_registry import get_agent_for
 from core.decision_agent import make_decision
 from agent_factory.factory import AgentFactory
 from swarm.result_collector import start_listening, wait_for_results
@@ -23,7 +22,12 @@ from ml.inference_server import start_server as start_inference_server
 logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_ID = "orchestrator"
-COLLECT_SECONDS = 10
+
+# Adaptive collection parameters
+_TARGET_PER_SENSOR = 3   # minimum readings per sensor type
+_MAX_WAIT          = 10.0
+_MIN_WAIT          = 3.0
+_POLL_INTERVAL     = 0.1
 
 factory = AgentFactory()
 
@@ -39,20 +43,50 @@ start_inference_server()
 
 
 def run_intent(intent: dict, use_llm: bool = True,
-               remote_task_count: int = 0) -> dict:
+               remote_task_count: int = 0,
+               user_text: str = None,
+               start_time: float = None) -> dict:
     """
-    Execute an intent dict produced by parse_intent() or parse_intent_llm().
+    Execute an intent dict, optionally overlapping LLM parsing with
+    sensor collection for reduced end-to-end latency.
 
     Args:
-        intent:            Structured intent dict with at least "data_required".
-        use_llm:           Informational flag (True = LLM parser, False = keyword).
-        remote_task_count: Number of tasks already dispatched to remote workers.
-                           The orchestrator will wait for this many TASK_RESULT
-                           packets before passing data to the decision agent.
+        intent:            Structured intent dict (from parse_intent or parse_intent_llm).
+        use_llm:           If True and user_text is provided, LLM parse runs in parallel
+                           with sensor collection.
+        remote_task_count: Number of tasks dispatched to remote workers to wait for.
+        user_text:         Raw user query. When provided, LLM parsing is run in a
+                           background thread overlapping with sensor collection (FIX 2).
+        start_time:        time.time() from the caller; used to print [TIMER] lines.
     """
+    _t0 = start_time  # may be None — only print timers when provided
+
+    # ------------------------------------------------------------------ #
+    # FIX 2: start LLM parse in background; use keyword parse for agents
+    # ------------------------------------------------------------------ #
+    _llm_intent: list = [None]
+    _llm_thread: threading.Thread | None = None
+
+    if user_text and use_llm:
+        from core.intent_parser import parse_intent, parse_intent_llm
+
+        def _parse_llm():
+            try:
+                _llm_intent[0] = parse_intent_llm(user_text)
+            except Exception:
+                pass
+
+        _llm_thread = threading.Thread(target=_parse_llm, daemon=True,
+                                       name="llm-intent-parser")
+        _llm_thread.start()
+
+        # Immediately derive agents from fast keyword parse
+        fast_intent = parse_intent(user_text)
+        intent = fast_intent
+
     data_required: list[str] = intent.get("data_required", [])
-    priority: str            = intent.get("priority", "normal")
-    parser_mode              = "LLM" if use_llm else "keyword"
+    priority: str             = intent.get("priority", "normal")
+    parser_mode               = "LLM+parallel" if _llm_thread else ("LLM" if use_llm else "keyword")
 
     print(f"\n[Orchestrator] Running intent — goal={intent.get('goal')}  "
           f"priority={priority}  sensors={data_required}  parser={parser_mode}")
@@ -66,34 +100,63 @@ def run_intent(intent: dict, use_llm: bool = True,
     agents = factory.create_from_intent(intent)
     for agent in agents:
         print(f"[Orchestrator] Started agent: {agent.agent_id}")
+    if _t0:
+        print(f"[TIMER] Agents started in {time.time() - _t0:.2f}s")
 
     # ------------------------------------------------------------------ #
-    # Collect local readings for COLLECT_SECONDS
+    # FIX 1: adaptive collection
     # ------------------------------------------------------------------ #
-    print(f"\n[Orchestrator] Collecting local data for {COLLECT_SECONDS}s ...\n")
+    target_readings = max(len(data_required) * _TARGET_PER_SENSOR, 1)
+    print(f"\n[Orchestrator] Collecting "
+          f"(target={target_readings} readings, min={_MIN_WAIT}s, max={_MAX_WAIT}s) ...\n")
+
     collected: dict[str, list] = {s: [] for s in data_required}
-    deadline = time.time() + COLLECT_SECONDS
+    t_collect_start = time.time()
+    deadline        = t_collect_start + _MAX_WAIT
 
     while time.time() < deadline:
         remaining = deadline - time.time()
-        msg = bus.receive(ORCHESTRATOR_ID, timeout=min(1.0, remaining))
-        if msg is None:
-            continue
-        payload = msg.get("message", {})
-        if payload.get("type") != "sensor_reading":
-            continue
-        data   = payload.get("data", {})
-        sensor = data.get("sensor")
-        if sensor in collected:
-            collected[sensor].append(data)
-            _print_reading(sensor, data)
+        msg = bus.receive(ORCHESTRATOR_ID, timeout=min(_POLL_INTERVAL, remaining))
+
+        elapsed       = time.time() - t_collect_start
+        total_so_far  = sum(len(v) for v in collected.values())
+
+        if msg is not None:
+            payload = msg.get("message", {})
+            if payload.get("type") == "sensor_reading":
+                data   = payload.get("data", {})
+                sensor = data.get("sensor")
+                if sensor in collected:
+                    collected[sensor].append(data)
+                    _print_reading(sensor, data)
+                    total_so_far = sum(len(v) for v in collected.values())
+
+        # Early-exit: min time elapsed AND enough readings gathered
+        if elapsed >= _MIN_WAIT and total_so_far >= target_readings:
+            break
+
+    elapsed_collect = time.time() - t_collect_start
+    total_collected = sum(len(v) for v in collected.values())
+    print(f"[ORCHESTRATOR] Collected {total_collected} readings in {elapsed_collect:.1f}s")
+    if _t0:
+        print(f"[TIMER] Sensors collected in {time.time() - _t0:.2f}s")
 
     # Stop local agents
     for agent in agents:
         agent.stop()
 
+    # If LLM parse finished by now, upgrade intent for goal/priority context
+    if _llm_thread is not None:
+        _llm_thread.join(timeout=0)  # non-blocking check
+        if _llm_intent[0] is not None:
+            intent = _llm_intent[0]
+            # Ensure collected dict covers any additional sensors from LLM parse
+            for s in intent.get("data_required", []):
+                if s not in collected:
+                    collected[s] = []
+
     # Feed every collected reading into the sliding window buffer
-    for sensor, readings in collected.items():
+    for readings in collected.values():
         for reading in readings:
             stream_buffer.add(reading)
 
@@ -106,7 +169,6 @@ def run_intent(intent: dict, use_llm: bool = True,
         remote_results = wait_for_results(remote_task_count, timeout=15)
         print(f"[ORCHESTRATOR] All results collected — local + remote\n")
 
-        # Merge remote readings into the collected dict
         for result in remote_results:
             sensor_type = result.get("sensor_type")
             data        = result.get("data", {})
@@ -139,20 +201,22 @@ def run_intent(intent: dict, use_llm: bool = True,
     # ------------------------------------------------------------------ #
     # ML Pipeline — distribute tasks across swarm nodes
     # ------------------------------------------------------------------ #
-    # Flatten the latest reading from each sensor into a single dict
     latest_readings: dict = {}
     for sensor, info in summary.items():
         if info["latest"]:
             latest_readings.update(info["latest"])
 
-    # Discover known nodes from the swarm (best-effort; returns empty dict
-    # when no peer discovery is available)
     try:
-        from swarm.peer_discovery import get_known_nodes
+        from swarm.peer_server import get_known_nodes
         known = get_known_nodes()
     except Exception:
-        known = {}
+        try:
+            from swarm.peer_discovery import get_known_nodes
+            known = get_known_nodes()
+        except Exception:
+            known = {}
 
+    final: dict = {}
     if latest_readings:
         decomposer = TaskDecomposer()
         executor   = ParallelExecutor()
@@ -161,7 +225,7 @@ def run_intent(intent: dict, use_llm: bool = True,
         plan = decomposer.decompose(latest_readings, known)
         print("[ML] Task plan:", {t: a["node_id"] for t, a in plan.items()})
 
-        window = stream_buffer.get_window()
+        window     = stream_buffer.get_window()
         ml_results = executor.execute(plan, latest_readings, window)
 
         print("\n" + "=" * 60)
@@ -169,23 +233,32 @@ def run_intent(intent: dict, use_llm: bool = True,
         print("=" * 60)
         final = assembler.assemble(ml_results)
         print("=" * 60 + "\n")
-    else:
-        final = {}
+
+    if _t0:
+        print(f"[TIMER] ML pipeline done in {time.time() - _t0:.2f}s")
 
     # ------------------------------------------------------------------ #
-    # Decision agent — receives ML final output (or raw summary as fallback)
+    # FIX 3: run decision agent in background — do not block return
     # ------------------------------------------------------------------ #
-    decision_input = final if final else summary
-    decision = make_decision(decision_input, intent.get("goal", "site_check"))
-    print("\n" + "=" * 60)
-    print("[DECISION AGENT] Assessment")
-    print("=" * 60)
-    print(decision)
-    print("=" * 60)
+    _goal = intent.get("goal", "site_check")
+    _decision_input = final if final else summary
+
+    def _run_decision():
+        d = make_decision(_decision_input, _goal)
+        print("\n" + "=" * 60)
+        print("[DECISION AGENT] Assessment")
+        print("=" * 60)
+        print(d)
+        print("=" * 60)
+        if _t0:
+            print(f"[TIMER] Decision done in {time.time() - _t0:.2f}s")
+
+    threading.Thread(target=_run_decision, daemon=True,
+                     name="decision-agent").start()
 
     print(f"\n[FACTORY] Status: {factory.status()}")
 
-    return {"summary": summary, "ml_pipeline": final, "decision": decision}
+    return {"summary": summary, "ml_pipeline": final, "decision": "computing..."}
 
 
 # ------------------------------------------------------------------ #

@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 PEER_PORT = 50010
 
-_known_nodes: dict = {}   # node_id -> {caps, addr, roles, last_seen}
+_known_nodes: dict = {}   # node_id -> {node_id, caps, addr, roles, last_seen}
 _lock = threading.Lock()
 _started = False
 
@@ -39,14 +39,33 @@ _started = False
 # ------------------------------------------------------------------ #
 
 def _add_peer(node_id: str, caps: dict, addr: str) -> None:
+    """
+    Store peer in a format compatible with TaskDecomposer.
+
+    Entry format (FIX 6):
+    {
+      "node_id":   "...",
+      "caps":      {"ram_gb": x, "cpu_cores": x, "roles": [...], "os": "..."},
+      "addr":      "ip_address",
+      "roles":     [...],
+      "last_seen": timestamp
+    }
+    """
     entry = {
-        "caps":      caps,
+        "node_id":   node_id,
+        "caps":      {
+            "ram_gb":    caps.get("ram_gb",    0),
+            "cpu_cores": caps.get("cpu_cores", 0),
+            "roles":     caps.get("roles",     ["worker"]),
+            "os":        caps.get("os",        ""),
+        },
         "addr":      addr,
         "roles":     caps.get("roles", ["worker"]),
         "last_seen": time.time(),
     }
     with _lock:
         _known_nodes[node_id] = entry
+
     # Mirror into dht_discovery.known_peers so task_distributor can see it
     try:
         from swarm.dht_discovery import register_peer

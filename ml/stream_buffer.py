@@ -4,7 +4,6 @@ ml/stream_buffer.py — Sliding window buffer for incoming sensor readings.
 
 import math
 from collections import deque
-from typing import Optional
 
 
 class StreamBuffer:
@@ -17,7 +16,7 @@ class StreamBuffer:
         self._window.append(reading)
 
     def is_ready(self) -> bool:
-        return len(self._window) >= 10
+        return len(self._window) >= 3
 
     def get_window(self) -> list:
         return list(self._window)
@@ -28,7 +27,6 @@ class StreamBuffer:
         if not window:
             return {}
 
-        # Collect values per field
         fields: dict[str, list] = {}
         for reading in window:
             for key, val in reading.items():

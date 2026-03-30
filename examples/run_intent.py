@@ -1,8 +1,8 @@
 """
 examples/run_intent.py — Interactive demo for the intent → agent pipeline.
 
-Uses the LLM-powered parser (Claude) to understand any natural language.
-Falls back to keyword matching if the API key is not set.
+Uses the LLM-powered parser (Ollama) to understand any natural language.
+Falls back to keyword matching if Ollama is unavailable.
 
 Usage:
     python examples/run_intent.py
@@ -34,7 +34,7 @@ logging.basicConfig(
     format="%(levelname)-7s  %(name)s — %(message)s",
 )
 
-from core.intent_parser import parse_intent_llm
+from core.intent_parser import parse_intent
 from core.orchestrator import run_intent
 from swarm.dht_discovery import start as start_discovery
 from swarm.peer_server import start_server
@@ -60,20 +60,24 @@ def main():
         print("No input provided. Exiting.")
         return
 
-    # 1. Parse with Claude (falls back to keywords automatically)
-    print()
-    intent = parse_intent_llm(user_text)
+    # Start overall timer
+    t0 = time.time()
 
-    # 2. Distribute tasks across swarm nodes
+    # FIX 2: Use fast keyword parse for swarm distribution (instant, no Ollama).
+    # The orchestrator will run the LLM parse in parallel with sensor collection.
+    print()
+    intent = parse_intent(user_text)
+    print(f"[TIMER] Intent parsed in {time.time() - t0:.2f}s")
+
+    # Distribute tasks across swarm nodes
     print("\n[SWARM] Distributing tasks...")
     plan = distribute_tasks(intent)
     print(f"[SWARM] Local tasks:  {plan['local_tasks']}")
     print(f"[SWARM] Remote tasks: {plan['remote_tasks']}")
 
-    # Count how many sensor tasks were sent to remote workers
     remote_count = sum(len(v) for v in plan["remote_tasks"].values())
 
-    # 3. Run orchestrator for local tasks; it will wait for remote results too
+    # Run orchestrator — LLM parsing overlaps with sensor collection inside
     local_intent = dict(intent)
     local_intent["data_required"] = plan["local_tasks"]
 
@@ -81,12 +85,20 @@ def main():
         print("\n[SWARM] No tasks to run — exiting.")
         return
 
-    result = run_intent(local_intent, use_llm=True, remote_task_count=remote_count)
+    result = run_intent(
+        local_intent,
+        use_llm=True,
+        remote_task_count=remote_count,
+        user_text=user_text,
+        start_time=t0,
+    )
 
-    # 4. Print the returned summary dict
+    # Print returned summary
     print("Returned summary dict:")
     for sensor, info in result["summary"].items():
         print(f"  {sensor}: {info['count']} reading(s), latest={info['latest']}")
+
+    print(f"[TIMER] TOTAL end-to-end: {time.time() - t0:.2f}s")
 
 
 if __name__ == "__main__":

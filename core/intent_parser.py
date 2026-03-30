@@ -4,10 +4,13 @@ core/intent_parser.py — Intent parsing with two strategies:
   parse_intent()     — fast keyword matching, no API, always works
   parse_intent_llm() — Claude-powered, understands any natural language,
                        falls back to parse_intent() on any error
+
+  Responses are cached for _cache_ttl seconds to avoid redundant Ollama calls.
 """
 
 import json
 import os
+import time
 import logging
 import requests
 
@@ -46,6 +49,12 @@ Rules:
 - Return ONLY the JSON object — no markdown, no explanation, no extra text.
 """
 
+# ------------------------------------------------------------------ #
+# Response cache (FIX 7)
+# ------------------------------------------------------------------ #
+_cache: dict = {}
+_cache_ttl: int = 60   # seconds
+
 
 # ------------------------------------------------------------------ #
 # LLM-powered parser
@@ -55,9 +64,17 @@ def parse_intent_llm(user_text: str) -> dict:
     """
     Parse user text into a structured intent dict using Ollama (local LLM).
 
-    POSTs to http://localhost:11434/api/chat with llama3.2:3b.
+    Cached for _cache_ttl seconds — repeated identical queries skip Ollama.
     Falls back to keyword-based parse_intent() if the API call fails.
     """
+    cache_key = user_text.strip().lower()
+
+    # Cache hit — skip Ollama entirely
+    if cache_key in _cache:
+        if time.time() - _cache[cache_key]["ts"] < _cache_ttl:
+            print("[INTENT] Cache hit - skipping Ollama call")
+            return _cache[cache_key]["result"]
+
     try:
         response = requests.post(
             "http://localhost:11434/api/chat",
@@ -97,6 +114,10 @@ def parse_intent_llm(user_text: str) -> dict:
 
         intent = json.loads(content)
         print("Parsed intent (LLM):", json.dumps(intent, indent=2))
+
+        # Store in cache
+        _cache[cache_key] = {"result": intent, "ts": time.time()}
+
         return intent
 
     except Exception as e:
