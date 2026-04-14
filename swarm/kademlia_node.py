@@ -144,18 +144,36 @@ class KademliaNode:
         while self._running:
             try:
                 data, addr = self._sock.recvfrom(MAX_PACKET)
+
+                # Filter non-JSON binary packets silently
                 try:
-                    msg = json.loads(data.decode("utf-8"))
-                    self._handle(msg, addr)
-                except Exception as e:
-                    print(f"[KADEMLIA] Parse error from {addr}: {e}", flush=True)
+                    text = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    # Binary packet - not our protocol, ignore silently
+                    continue
+
+                # Filter packets not starting with {
+                text = text.strip()
+                if not text.startswith("{"):
+                    continue
+
+                msg = json.loads(text)
+
+                # Filter packets without our required fields
+                if "type" not in msg:
+                    continue
+
+                self._handle(msg, addr)
+
+            except json.JSONDecodeError:
+                pass  # ignore silently
             except socket.timeout:
                 continue
             except OSError:
                 break   # socket closed on stop()
             except Exception as e:
                 if self._running:
-                    print(f"[KADEMLIA] Listen error: {e}", flush=True)
+                    print(f"[KADEMLIA] Error: {e}", flush=True)
 
     def _refresh_loop(self) -> None:
         while self._running:

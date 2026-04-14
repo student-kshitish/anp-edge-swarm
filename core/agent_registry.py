@@ -1,4 +1,4 @@
-"""
+`"""
 core/agent_registry.py — Maps sensor type names to instantiated SensorAgents.
 """
 
