@@ -11,6 +11,6 @@ IP selection guide:
 """
 
 PEER_IPS = [
-    "192.168.1.9",   # Windows laptop
+    "192.168.1.11",   # Windows laptop
     "192.168.1.40",  # Victus Linux
 ]
