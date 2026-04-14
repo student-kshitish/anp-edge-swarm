@@ -47,6 +47,8 @@ class KademliaNode:
         self.storage: dict = {}                 # key -> value string
         self.known_peers: dict = {}             # node_id -> cap dict
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         self._running: bool = False
 
     # ------------------------------------------------------------------ #
@@ -57,7 +59,13 @@ class KademliaNode:
         """
         Bind UDP socket, start background threads, optionally bootstrap.
         """
-        self._sock.bind(("0.0.0.0", PORT))
+        try:
+            self._sock.bind(("0.0.0.0", PORT))
+            print(f"[KADEMLIA] Socket bound to 0.0.0.0:{PORT}")
+        except OSError as e:
+            print(f"[KADEMLIA] ERROR binding to port {PORT}: {e}")
+            print(f"[KADEMLIA] Try: sudo lsof -i udp:{PORT}")
+            raise
         self._sock.settimeout(2.0)
         self._running = True
 
@@ -69,6 +77,7 @@ class KademliaNode:
         ).start()
 
         if bootstrap_ip:
+            print(f"[KADEMLIA] Sending FIND_NODE to bootstrap {bootstrap_ip}:{bootstrap_port}")
             self._send(bootstrap_ip, bootstrap_port, {
                 "type": "FIND_NODE",
                 "sender_id": self.node_id,
@@ -77,6 +86,7 @@ class KademliaNode:
                 "target_id": self.node_id,
                 "cap": self._own_cap(),
             })
+            print(f"[KADEMLIA] Bootstrap message sent")
 
         print(f"[KADEMLIA] Node {self.node_id[:12]} started on port 6881", flush=True)
 
