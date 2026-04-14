@@ -21,7 +21,7 @@ from ml.task_workers import (
 )
 
 REMOTE_PORT = 50006
-TASK_TIMEOUT = 5.0   # seconds
+TASK_TIMEOUT = 15.0   # seconds — remote nodes need time to receive, infer, respond
 
 
 class ParallelExecutor:
@@ -69,12 +69,28 @@ class ParallelExecutor:
 
             # Collect non-action results within timeout
             deadline = time.time() + TASK_TIMEOUT
-            for fut in as_completed(futures, timeout=max(0.1, deadline - time.time())):
-                task_type = futures[fut]
-                try:
-                    results[task_type] = fut.result(timeout=0)
-                except Exception as exc:
-                    results[task_type] = self._failed_result(task_type, str(exc))
+            try:
+                for fut in as_completed(futures, timeout=max(0.1, deadline - time.time())):
+                    task_type = futures[fut]
+                    try:
+                        results[task_type] = fut.result(timeout=0)
+                    except Exception as exc:
+                        results[task_type] = self._failed_result(task_type, str(exc))
+            except TimeoutError:
+                print("[EXECUTOR] Some tasks timed out - using available results")
+                for fut, task_type in futures.items():
+                    if fut.done():
+                        try:
+                            results[task_type] = fut.result()
+                        except Exception as e:
+                            results[task_type] = TaskResult(
+                                task_type=task_type,
+                                node_id="local",
+                                result={},
+                                duration_ms=0,
+                                success=False,
+                                error=str(e)
+                            )
 
         # Ensure all non-action tasks have a result entry
         for task_type in TASKS:

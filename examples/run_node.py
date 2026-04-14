@@ -1,3 +1,7 @@
+# Windows admin: netsh advfirewall firewall add rule
+# name="EdgeMind ML 50006" protocol=TCP dir=in
+# localport=50006 action=allow
+
 """
 examples/run_node.py — Boot a swarm node:
   - joins the Kademlia DHT for internet-wide peer discovery
@@ -18,6 +22,7 @@ import threading
 
 from swarm.dht_discovery import start as start_discovery, get_known_nodes
 from swarm.peer_server import start_server
+from ml.inference_server import start_server as start_inference_server
 from swarm.peer_client import exchange_with_all
 from swarm.known_peers import PEER_IPS
 from swarm.task_distributor import listen_for_tasks, send_result
@@ -160,6 +165,8 @@ def main():
 
     # 1b. Start TCP peer server + connect to known peers
     start_server()
+    start_inference_server()
+    print("[NODE] ML inference server started on port 50006")
     exchange_with_all(PEER_IPS)
 
     # 1c. Listen for tasks assigned by brain nodes (TCP port 50004)
