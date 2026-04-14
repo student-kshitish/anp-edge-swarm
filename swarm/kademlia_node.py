@@ -48,7 +48,9 @@ class KademliaNode:
         self.known_peers: dict = {}             # node_id -> cap dict
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        # SO_REUSEPORT not available on Windows — skip it
+        if hasattr(socket, 'SO_REUSEPORT'):
+            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         self._running: bool = False
 
     # ------------------------------------------------------------------ #
