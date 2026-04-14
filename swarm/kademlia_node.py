@@ -129,8 +129,16 @@ class KademliaNode:
             return {}
 
     def get_all_peers(self) -> dict:
-        """Return a copy of the known_peers dict."""
-        return dict(self.known_peers)
+        result = {}
+        for node_id, caps in self.known_peers.items():
+            result[node_id] = {
+                "node_id": node_id,
+                "caps": caps,
+                "addr": caps.get("ip", "unknown") if isinstance(caps, dict) else "unknown",
+                "roles": caps.get("roles", ["worker"]) if isinstance(caps, dict) else ["worker"],
+                "last_seen": time.time()
+            }
+        return result
 
     def store(self, key: str, value_str: str) -> None:
         """Store locally and replicate to K closest nodes."""
@@ -237,9 +245,13 @@ class KademliaNode:
             })
 
         elif mtype == "PONG":
-            pass   # routing table already updated above; cap already stored
+            if sender_id:
+                self.routing_table.add_node(sender_id, addr[0], addr[1])
 
         elif mtype == "FIND_NODE":
+            if sender_id:
+                self.known_peers.setdefault(sender_id, msg.get("cap") or {})
+                self.routing_table.add_node(sender_id, addr[0], addr[1])
             target_id = msg.get("target_id", self.node_id)
             closest = self.routing_table.find_closest(target_id, K)
             nodes = [[n[0], n[1], n[2]] for n in closest]
@@ -258,6 +270,7 @@ class KademliaNode:
                 nid, nip, nport = entry[0], entry[1], int(entry[2])
                 if nid == self.node_id:
                     continue
+                self.known_peers.setdefault(nid, {"ip": nip, "port": nport})
                 self.routing_table.add_node(nid, nip, nport)
                 print(f"[KADEMLIA] Discovered {nid[:12]} @ {nip}", flush=True)
                 # Walk towards target to populate routing table
@@ -304,6 +317,7 @@ class KademliaNode:
             ann_cap = msg.get("cap")
             if ann_cap and sender_id:
                 self.known_peers[sender_id] = ann_cap
+                self.routing_table.add_node(sender_id, addr[0], addr[1])
                 nid_display = (
                     ann_cap.get("node_id", sender_id)
                     if isinstance(ann_cap, dict)
