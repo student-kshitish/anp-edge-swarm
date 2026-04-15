@@ -133,6 +133,7 @@ class BluetoothTransport:
 
         Silently discards devices that are not running an EdgeMind node.
         """
+        bt_sock = None
         try:
             bt_sock = socket.socket(
                 socket.AF_BLUETOOTH,
@@ -159,13 +160,31 @@ class BluetoothTransport:
                     "caps":      peer_cap,
                     "last_seen": time.time(),
                 }
-                print(f"[BT] Connected to EdgeMind peer: {peer_id[:12]}")
+                print(f"[BT] Connected to EdgeMind peer: {peer_id[:12]} @ {addr}")
                 for cb in self._callbacks:
                     cb(json.dumps(peer_cap).encode(), addr)
-
-            bt_sock.close()
         except Exception:
             pass  # Not an EdgeMind node or not reachable — ignore silently
+        finally:
+            if bt_sock:
+                try:
+                    bt_sock.close()
+                except Exception:
+                    pass
+
+    def add_static_peer(self, mac: str, node_id: str):
+        """Manually register a peer by Bluetooth MAC and node ID.
+
+        Useful when the remote MAC is already known (e.g. printed on the
+        device) so RFCOMM discovery does not need to probe first.
+        """
+        self.known_bt_peers[mac] = {
+            "address":   mac,
+            "node_id":   node_id,
+            "caps":      {},
+            "last_seen": time.time(),
+        }
+        print(f"[BT] Static peer added: {node_id[:12]} @ {mac}")
 
     def _send_rfcomm(self, addr: str, message: dict):
         """Open a short-lived RFCOMM connection and send a message dict."""
@@ -230,27 +249,33 @@ class BluetoothTransport:
 
     def _handle_rfcomm_client(self, client, addr):
         """Exchange capabilities with an inbound RFCOMM connection."""
+        peer_addr = addr[0]  # addr is (mac, channel) tuple from accept()
         try:
+            # Receive peer capabilities first (client sends first)
             data     = client.recv(4096)
             peer_cap = json.loads(data.decode())
 
-            # Reply with our own capabilities
+            # Reply with our own capabilities before updating state, so the
+            # remote side is never left waiting if an exception fires later.
             cap = get_capabilities()
             cap["node_id"] = self.node_id
             client.send(json.dumps(cap).encode())
 
             peer_id = peer_cap.get("node_id")
             if peer_id and peer_id != self.node_id:
-                self.known_bt_peers[addr[0]] = {
-                    "address":   addr[0],
+                self.known_bt_peers[peer_addr] = {
+                    "address":   peer_addr,
                     "node_id":   peer_id,
                     "caps":      peer_cap,
                     "last_seen": time.time(),
                 }
-                print(f"[BT] Incoming EdgeMind peer: {peer_id[:12]}")
+                print(f"[BT] Peer connected: {peer_id[:12]} @ {peer_addr}")
                 for cb in self._callbacks:
-                    cb(json.dumps(peer_cap).encode(), addr[0])
-
-            client.close()
+                    cb(json.dumps(peer_cap).encode(), peer_addr)
         except Exception as e:
             print(f"[BT] Client handler error: {e}")
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
