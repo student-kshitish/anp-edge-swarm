@@ -272,7 +272,17 @@ class BluetoothTransport:
             print(f"[BT] Received {len(data)} bytes from {peer_mac}")
             peer_cap = json.loads(data.decode())
 
+            # Handle three JSON shapes:
+            #   1. Raw caps:          {"node_id": "...", "os": ...}
+            #   2. Mesh envelope:     {"type": "ANNOUNCE", "payload": {"node_id": ...}}
+            #   3. Wrapped caps:      {"caps": {"node_id": ...}}
             peer_id = peer_cap.get("node_id")
+            if not peer_id:
+                payload = peer_cap.get("payload", {})
+                peer_id = payload.get("node_id")
+            if not peer_id:
+                caps = peer_cap.get("caps", {})
+                peer_id = caps.get("node_id")
             print(f"[BT] Parsed peer_id={peer_id!r} self.node_id={self.node_id!r}")
 
             if peer_id and peer_id != self.node_id:
