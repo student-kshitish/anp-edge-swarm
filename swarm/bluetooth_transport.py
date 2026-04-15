@@ -255,23 +255,23 @@ class BluetoothTransport:
             data     = client.recv(4096)
             peer_cap = json.loads(data.decode())
 
+            peer_id = peer_cap.get("node_id")
+            if peer_id and peer_id != self.node_id:
+                self.known_bt_peers[addr[0]] = {
+                    "address":   addr[0],
+                    "node_id":   peer_id,
+                    "caps":      peer_cap,
+                    "last_seen": time.time(),
+                }
+                print(f"[BT] Peer registered: {peer_id[:12]} @ {addr[0]}")
+                for cb in self._callbacks:
+                    cb(json.dumps(peer_cap).encode(), addr[0])
+
             # Reply with our own capabilities before updating state, so the
             # remote side is never left waiting if an exception fires later.
             cap = get_capabilities()
             cap["node_id"] = self.node_id
             client.send(json.dumps(cap).encode())
-
-            peer_id = peer_cap.get("node_id")
-            if peer_id and peer_id != self.node_id:
-                self.known_bt_peers[peer_addr] = {
-                    "address":   peer_addr,
-                    "node_id":   peer_id,
-                    "caps":      peer_cap,
-                    "last_seen": time.time(),
-                }
-                print(f"[BT] Peer connected: {peer_id[:12]} @ {peer_addr}")
-                for cb in self._callbacks:
-                    cb(json.dumps(peer_cap).encode(), peer_addr)
         except Exception as e:
             print(f"[BT] Client handler error: {e}")
         finally:
