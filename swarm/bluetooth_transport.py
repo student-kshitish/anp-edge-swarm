@@ -234,6 +234,8 @@ class BluetoothTransport:
                 try:
                     server.settimeout(2)
                     client, addr = server.accept()
+                    # Log accept() result so we can verify the addr format
+                    print(f"[BT] RFCOMM accepted connection: client={client} addr={addr!r}")
                     threading.Thread(
                         target=self._handle_rfcomm_client,
                         args=(client, addr),
@@ -249,31 +251,53 @@ class BluetoothTransport:
 
     def _handle_rfcomm_client(self, client, addr):
         """Exchange capabilities with an inbound RFCOMM connection."""
-        peer_addr = addr[0]  # addr is (mac, channel) tuple from accept()
+        import traceback
+
+        # addr from accept() on Linux is (mac_string, channel_int).
+        # Log the raw value so any unexpected format is immediately visible.
+        print(f"[BT] _handle_rfcomm_client called with addr={addr!r}")
+
+        # Derive peer MAC robustly: handle both tuple and bare-string forms.
+        if isinstance(addr, (tuple, list)):
+            peer_mac = addr[0]
+        else:
+            peer_mac = str(addr)
+
         try:
-            # Receive peer capabilities first (client sends first)
-            data     = client.recv(4096)
+            data = client.recv(4096)
+            if not data:
+                print(f"[BT] Empty recv from {peer_mac} — dropping")
+                return
+
+            print(f"[BT] Received {len(data)} bytes from {peer_mac}")
             peer_cap = json.loads(data.decode())
 
             peer_id = peer_cap.get("node_id")
+            print(f"[BT] Parsed peer_id={peer_id!r} self.node_id={self.node_id!r}")
+
             if peer_id and peer_id != self.node_id:
-                self.known_bt_peers[addr[0]] = {
-                    "address":   addr[0],
+                self.known_bt_peers[peer_mac] = {
+                    "address":   peer_mac,
                     "node_id":   peer_id,
                     "caps":      peer_cap,
                     "last_seen": time.time(),
                 }
-                print(f"[BT] Peer registered: {peer_id[:12]} @ {addr[0]}")
+                print(f"[BT] Peer registered: {peer_id[:12]} @ {peer_mac}")
                 for cb in self._callbacks:
-                    cb(json.dumps(peer_cap).encode(), addr[0])
+                    cb(json.dumps(peer_cap).encode(), peer_mac)
+            else:
+                print(f"[BT] Peer skipped: peer_id={peer_id!r} "
+                      f"(same as self={peer_id == self.node_id})")
 
-            # Reply with our own capabilities before updating state, so the
-            # remote side is never left waiting if an exception fires later.
+            # Reply with our own capabilities
             cap = get_capabilities()
             cap["node_id"] = self.node_id
             client.send(json.dumps(cap).encode())
-        except Exception as e:
-            print(f"[BT] Client handler error: {e}")
+
+        except Exception:
+            # Print full traceback so silent swallowing can no longer hide bugs
+            print(f"[BT] _handle_rfcomm_client error from {peer_mac}:")
+            traceback.print_exc()
         finally:
             try:
                 client.close()
