@@ -195,7 +195,19 @@ class BluetoothTransport:
                 socket.SOCK_STREAM,
                 socket.BTPROTO_RFCOMM,
             )
-            server.bind(("", RFCOMM_PORT))
+            # Linux requires an explicit Bluetooth MAC address for bind();
+            # "00:00:00:00:00:00" acts as BDADDR_ANY and works on Linux.
+            # Windows accepts an empty string, so fall back to that if the
+            # zero-MAC bind fails (e.g. on Windows or older kernels).
+            try:
+                server.bind(("00:00:00:00:00:00", RFCOMM_PORT))
+            except Exception:
+                try:
+                    server.bind(("", RFCOMM_PORT))
+                except Exception as e:
+                    print(f"[BT] RFCOMM bind failed: {e} — server disabled")
+                    return
+
             server.listen(5)
             print(f"[BT] RFCOMM server listening on port {RFCOMM_PORT}")
 
@@ -210,6 +222,9 @@ class BluetoothTransport:
                     ).start()
                 except socket.timeout:
                     continue
+                except Exception as e:
+                    print(f"[BT] RFCOMM accept error: {e}")
+                    break
         except Exception as e:
             print(f"[BT] RFCOMM server error: {e}")
 
