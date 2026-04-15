@@ -126,8 +126,15 @@ def _listen_loop():
     sock.close()
 
 
-def start():
-    """Start UDP discovery (non-blocking)."""
+def start(bootstrap_ip=None, use_bluetooth=False):
+    """Start UDP discovery (non-blocking).
+
+    Args:
+        bootstrap_ip:   Unused here (kept for API compatibility with dht_discovery).
+        use_bluetooth:  When True, also start Bluetooth mesh transport as an
+                        additional peer-discovery channel.  Falls back silently
+                        if bleak is not installed or BLE is unavailable.
+    """
     global _running
     if _running:
         return
@@ -135,6 +142,21 @@ def start():
     threading.Thread(target=_broadcast_loop, daemon=True, name="disc-broadcast").start()
     threading.Thread(target=_listen_loop,    daemon=True, name="disc-listen").start()
     logger.info("Discovery started on UDP port %d", BROADCAST_PORT)
+
+    if use_bluetooth:
+        try:
+            from swarm.bluetooth_discovery import start as bt_start
+
+            def on_bt_discover(node):
+                node_id = node["caps"].get("node_id", "?")
+                print(f"[DISC] BT peer: {node_id[:12]}")
+
+            bt_start(on_discover=on_bt_discover)
+            print("[DISC] Bluetooth transport active")
+        except ImportError:
+            print("[DISC] bleak not installed — WiFi only")
+        except Exception as e:
+            print(f"[DISC] BT failed: {e} — WiFi only")
 
 
 def stop():

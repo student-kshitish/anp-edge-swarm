@@ -145,10 +145,27 @@ def main():
         default=6881,
         help="UDP port of the bootstrap node (default: 6881).",
     )
+    parser.add_argument(
+        "--bluetooth",
+        action="store_true",
+        help="Enable Bluetooth mesh transport (requires: pip install bleak).",
+    )
     args = parser.parse_args()
 
     # 1. Join Kademlia DHT (internet-wide peer discovery)
     start_discovery(bootstrap_ip=args.bootstrap, bootstrap_port=args.port)
+
+    # 1a. Optionally enable Bluetooth mesh as additional transport
+    if args.bluetooth:
+        try:
+            from swarm.bluetooth_discovery import start as bt_start
+            bt_start()
+            print("[NODE] Bluetooth mesh transport enabled")
+        except ImportError:
+            print("[NODE] bleak not installed — Bluetooth mesh unavailable")
+        except Exception as e:
+            print(f"[NODE] Bluetooth mesh failed: {e}")
+
     if args.bootstrap:
         logger.info("DHT discovery started — bootstrapping from %s:%s", args.bootstrap, args.port)
     else:
