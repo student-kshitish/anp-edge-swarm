@@ -1,30 +1,43 @@
 """
-swarm/bluetooth_transport.py — BLE advertising and scanning via bleak.
+swarm/bluetooth_transport.py — Bluetooth peer discovery via BLE scan + RFCOMM.
 
-Scans for nearby EDGEMIND nodes every 10 seconds and connects via GATT
-to exchange structured JSON messages.  If bleak is not installed the
-transport silently degrades: start() returns False and nothing breaks.
+Discovery strategy (no BLE advertising required):
+
+  1. BleakScanner discovers all nearby Bluetooth devices every 15 s.
+  2. For each unseen device, a background thread attempts an RFCOMM
+     connection on RFCOMM_PORT (classic Bluetooth, supported on all laptops).
+  3. On connect, both sides exchange their capability JSON.
+     If the remote node carries a "node_id" key it is treated as an
+     EdgeMind peer and stored in known_bt_peers.
+  4. An RFCOMM server thread runs in parallel to accept incoming probes
+     from other EdgeMind nodes performing the same scan.
+
+This approach requires no platform-specific BLE advertising and works on
+both Linux and Windows.  bleak is still used for scanning only.
+
+Fallback: if bleak is not installed, start() returns False and the rest
+of the swarm continues on WiFi/DHT without any exception.
 """
 
 import asyncio
 import json
+import socket
 import threading
 import time
 
-from swarm.node_identity import get_node_id
 from swarm.capability import get_capabilities
+from swarm.node_identity import get_node_id
 
-SERVICE_UUID = "12345678-1234-5678-1234-567812345678"
-CHAR_UUID    = "12345678-1234-5678-1234-567812345679"
+RFCOMM_PORT = 3
 
 
 class BluetoothTransport:
 
     def __init__(self):
         self.node_id        = get_node_id()
-        self.known_bt_peers = {}   # BLE address -> peer info dict
+        self.known_bt_peers = {}   # BT address -> peer info dict
         self.running        = False
-        self._callbacks     = []
+        self._callbacks     = []   # on_message(raw: bytes, addr: str)
         self._loop          = None
 
     # ------------------------------------------------------------------
@@ -32,10 +45,9 @@ class BluetoothTransport:
     # ------------------------------------------------------------------
 
     def start(self, on_message=None) -> bool:
-        """Start BLE scanning in a background thread.
+        """Start BLE scanning and RFCOMM server in background threads.
 
-        Returns True if bleak is available and scanning has begun,
-        False if bleak is missing (graceful fallback).
+        Returns True on success, False if bleak is unavailable.
         """
         try:
             import bleak  # noqa: F401 — presence check only
@@ -46,27 +58,34 @@ class BluetoothTransport:
         if on_message:
             self._callbacks.append(on_message)
 
-        self._loop   = asyncio.new_event_loop()
         self.running = True
+        self._loop   = asyncio.new_event_loop()
 
-        t = threading.Thread(
+        # BLE scan loop (asyncio, dedicated event loop)
+        threading.Thread(
             target=self._run_loop,
             daemon=True,
             name="bt-transport",
-        )
-        t.start()
+        ).start()
+
+        # RFCOMM server (blocking accept loop, own thread)
+        threading.Thread(
+            target=self.start_rfcomm_server,
+            daemon=True,
+            name="bt-rfcomm-server",
+        ).start()
+
         print("[BT] Bluetooth transport started")
         return True
 
     def send_message(self, message: dict):
-        """Fire-and-forget broadcast to every known BLE peer."""
-        if not self._loop:
-            return
+        """Send a message dict to every known peer via RFCOMM."""
         for addr in list(self.known_bt_peers.keys()):
-            asyncio.run_coroutine_threadsafe(
-                self.send_to_peer(addr, message),
-                self._loop,
-            )
+            threading.Thread(
+                target=self._send_rfcomm,
+                args=(addr, message),
+                daemon=True,
+            ).start()
 
     def get_known_peers(self) -> dict:
         return dict(self.known_bt_peers)
@@ -75,7 +94,7 @@ class BluetoothTransport:
         self.running = False
 
     # ------------------------------------------------------------------
-    # Internal event-loop helpers
+    # BLE scan (asyncio)
     # ------------------------------------------------------------------
 
     def _run_loop(self):
@@ -83,9 +102,7 @@ class BluetoothTransport:
         self._loop.run_until_complete(self._main())
 
     async def _main(self):
-        await asyncio.gather(
-            self._scan_loop(),
-        )
+        await self._scan_loop()
 
     async def _scan_loop(self):
         from bleak import BleakScanner
@@ -93,27 +110,132 @@ class BluetoothTransport:
             try:
                 devices = await BleakScanner.discover(timeout=5.0)
                 for device in devices:
-                    if "EDGEMIND" in (device.name or ""):
-                        if device.address not in self.known_bt_peers:
-                            self.known_bt_peers[device.address] = {
-                                "address":   device.address,
-                                "name":      device.name,
-                                "rssi":      device.rssi,
-                                "last_seen": time.time(),
-                            }
-                            print(f"[BT] Found peer: {device.name} ({device.address})")
+                    addr = device.address
+                    if addr not in self.known_bt_peers:
+                        print(f"[BT] Found device: {device.name} ({addr})")
+                        # Probe in a background thread so the scan loop
+                        # is never blocked by a slow RFCOMM handshake.
+                        threading.Thread(
+                            target=self._try_rfcomm_connect,
+                            args=(addr,),
+                            daemon=True,
+                        ).start()
             except Exception as e:
                 print(f"[BT] Scan error: {e}")
-            await asyncio.sleep(10)
+            await asyncio.sleep(15)
 
-    async def send_to_peer(self, address: str, message: dict) -> bool:
-        from bleak import BleakClient
+    # ------------------------------------------------------------------
+    # RFCOMM outbound (client side)
+    # ------------------------------------------------------------------
+
+    def _try_rfcomm_connect(self, addr: str):
+        """Attempt an RFCOMM handshake with a device found by BLE scan.
+
+        Silently discards devices that are not running an EdgeMind node.
+        """
         try:
-            async with BleakClient(address, timeout=10) as client:
-                data = json.dumps(message).encode()
-                await client.write_gatt_char(CHAR_UUID, data)
-                print(f"[BT] Sent {message.get('type')} to {address}")
-                return True
+            bt_sock = socket.socket(
+                socket.AF_BLUETOOTH,
+                socket.SOCK_STREAM,
+                socket.BTPROTO_RFCOMM,
+            )
+            bt_sock.settimeout(5)
+            bt_sock.connect((addr, RFCOMM_PORT))
+
+            # Send our capabilities first
+            cap = get_capabilities()
+            cap["node_id"] = self.node_id
+            bt_sock.send(json.dumps(cap).encode())
+
+            # Read the remote node's capabilities
+            data     = bt_sock.recv(4096)
+            peer_cap = json.loads(data.decode())
+
+            peer_id = peer_cap.get("node_id")
+            if peer_id and peer_id != self.node_id:
+                self.known_bt_peers[addr] = {
+                    "address":   addr,
+                    "node_id":   peer_id,
+                    "caps":      peer_cap,
+                    "last_seen": time.time(),
+                }
+                print(f"[BT] Connected to EdgeMind peer: {peer_id[:12]}")
+                for cb in self._callbacks:
+                    cb(json.dumps(peer_cap).encode(), addr)
+
+            bt_sock.close()
+        except Exception:
+            pass  # Not an EdgeMind node or not reachable — ignore silently
+
+    def _send_rfcomm(self, addr: str, message: dict):
+        """Open a short-lived RFCOMM connection and send a message dict."""
+        try:
+            bt_sock = socket.socket(
+                socket.AF_BLUETOOTH,
+                socket.SOCK_STREAM,
+                socket.BTPROTO_RFCOMM,
+            )
+            bt_sock.settimeout(5)
+            bt_sock.connect((addr, RFCOMM_PORT))
+            bt_sock.send(json.dumps(message).encode())
+            bt_sock.close()
+            print(f"[BT] Sent {message.get('type')} to {addr}")
         except Exception as e:
-            print(f"[BT] Send error to {address}: {e}")
-            return False
+            print(f"[BT] Send error to {addr}: {e}")
+
+    # ------------------------------------------------------------------
+    # RFCOMM inbound (server side)
+    # ------------------------------------------------------------------
+
+    def start_rfcomm_server(self):
+        """Listen for incoming RFCOMM connections from other EdgeMind nodes."""
+        try:
+            server = socket.socket(
+                socket.AF_BLUETOOTH,
+                socket.SOCK_STREAM,
+                socket.BTPROTO_RFCOMM,
+            )
+            server.bind(("", RFCOMM_PORT))
+            server.listen(5)
+            print(f"[BT] RFCOMM server listening on port {RFCOMM_PORT}")
+
+            while self.running:
+                try:
+                    server.settimeout(2)
+                    client, addr = server.accept()
+                    threading.Thread(
+                        target=self._handle_rfcomm_client,
+                        args=(client, addr),
+                        daemon=True,
+                    ).start()
+                except socket.timeout:
+                    continue
+        except Exception as e:
+            print(f"[BT] RFCOMM server error: {e}")
+
+    def _handle_rfcomm_client(self, client, addr):
+        """Exchange capabilities with an inbound RFCOMM connection."""
+        try:
+            data     = client.recv(4096)
+            peer_cap = json.loads(data.decode())
+
+            # Reply with our own capabilities
+            cap = get_capabilities()
+            cap["node_id"] = self.node_id
+            client.send(json.dumps(cap).encode())
+
+            peer_id = peer_cap.get("node_id")
+            if peer_id and peer_id != self.node_id:
+                self.known_bt_peers[addr[0]] = {
+                    "address":   addr[0],
+                    "node_id":   peer_id,
+                    "caps":      peer_cap,
+                    "last_seen": time.time(),
+                }
+                print(f"[BT] Incoming EdgeMind peer: {peer_id[:12]}")
+                for cb in self._callbacks:
+                    cb(json.dumps(peer_cap).encode(), addr[0])
+
+            client.close()
+        except Exception as e:
+            print(f"[BT] Client handler error: {e}")
