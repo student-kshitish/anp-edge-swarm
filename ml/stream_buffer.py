@@ -21,6 +21,11 @@ class StreamBuffer:
     def get_window(self) -> list:
         return list(self._window)
 
+    @property
+    def _data(self) -> list:
+        """Read-only view of the window contents (used for length checks)."""
+        return list(self._window)
+
     def get_stats(self) -> dict:
         """Return mean/std/min/max per numeric field across the window."""
         window = self.get_window()

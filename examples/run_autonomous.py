@@ -64,7 +64,7 @@ for sensor_type in sensors:
     agent = SensorAgent(
         agent_id=f"auto-{sensor_type}",
         sensor_type=sensor_type,
-        report_to="orchestrator",
+        report_to="swarm-mind",
     )
     agent.start()
     print(f"[BOOT] Sensor started: {sensor_type}")

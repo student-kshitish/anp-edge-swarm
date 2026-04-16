@@ -28,10 +28,13 @@ class PipelineTrigger:
         self.action_agent = ActionAgent()
         self.running      = False
         self.cycle_count  = 0
-        self._log_offset  = 0   # tracks how far into bus.get_log() we've consumed
 
     def start(self):
         self.running = True
+        # Subscribe before starting threads so no readings are dropped
+        # if sensors are already running when start() is called.
+        from bus.message_bus import bus as _bus
+        _bus.subscribe("swarm-mind")
         threading.Thread(
             target=self._collect_loop,
             daemon=True,
@@ -49,26 +52,26 @@ class PipelineTrigger:
         self.buffer.add(reading)
 
     def _collect_loop(self):
-        """
-        Drain new sensor_reading messages from the shared bus log.
-        Uses an offset so each entry is processed exactly once.
-        """
+        from bus.message_bus import bus
         while self.running:
             try:
-                bus = self.get_bus()
-                log = bus.get_log()
-                new_entries = log[self._log_offset:]
-                self._log_offset += len(new_entries)
-
-                for entry in new_entries:
-                    msg = entry.get("message", {})
-                    if isinstance(msg, dict) and msg.get("type") == "sensor_reading":
-                        data = msg.get("data", {})
+                # receive() returns one bus envelope or None:
+                # {"from": sender, "to": "swarm-mind", "message": payload, "ts": ...}
+                # SensorAgent payload: {"type": "sensor_reading", "data": {...}, ...}
+                envelope = bus.receive("swarm-mind", timeout=1)
+                if envelope:
+                    payload = envelope.get("message", {})
+                    if isinstance(payload, dict) and payload.get("type") == "sensor_reading":
+                        data = payload.get("data", {})
                         if data:
                             self.buffer.add(data)
+                            print(
+                                f"[PIPELINE] Reading buffered: "
+                                f"{data.get('sensor', '?')} "
+                                f"buffer={len(self.buffer._data)}"
+                            )
             except Exception:
                 pass
-            time.sleep(1)
 
     def _pipeline_loop(self):
         while self.running:
