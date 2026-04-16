@@ -52,6 +52,24 @@ class DBAgent:
             from db.adapters.sqlite_adapter import SQLiteAdapter
             self.adapter = SQLiteAdapter()
             self.adapter.init()
+            # Verify schema: if work_orders was created by the old db/schema.py
+            # it will have wo_id instead of record_id — drop and recreate.
+            try:
+                conn      = self.adapter._conn()
+                cols      = conn.execute(
+                    "PRAGMA table_info(work_orders)"
+                ).fetchall()
+                col_names = [c[1] for c in cols]
+                if "record_id" not in col_names:
+                    print("[DB-AGENT] Old schema detected - dropping tables")
+                    conn.execute("DROP TABLE IF EXISTS work_orders")
+                    conn.execute("DROP TABLE IF EXISTS sensor_readings")
+                    conn.execute("DROP TABLE IF EXISTS predictions")
+                    conn.commit()
+                conn.close()
+                self.adapter.init()  # reinit with correct schema
+            except Exception as e:
+                print(f"[DB-AGENT] Schema check error: {e}")
             print("[DB-AGENT] Using SQLite")
             return
         except Exception:

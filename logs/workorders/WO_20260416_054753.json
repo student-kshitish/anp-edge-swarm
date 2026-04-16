@@ -1,0 +1,53 @@
+{
+  "work_order_id": "WO-20260416_054753",
+  "created_at": "2026-04-16T05:47:53.550973",
+  "priority": "LOW",
+  "status": "OPEN",
+  "site_status": "LOW",
+  "description": "Check anomaly reports and historical data for more information.",
+  "anomalies": [],
+  "trends": {
+    "count": {
+      "slope": 0.0,
+      "direction": "STABLE",
+      "predicted_next": 17.0
+    },
+    "qty": {
+      "slope": 0.0,
+      "direction": "STABLE",
+      "predicted_next": 92.0
+    },
+    "celsius": {
+      "slope": 0.0,
+      "direction": "STABLE",
+      "predicted_next": 24.3
+    },
+    "humidity_pct": {
+      "slope": 0.0,
+      "direction": "STABLE",
+      "predicted_next": 52.3
+    }
+  },
+  "sensor_snapshot": {
+    "attendance": {
+      "sensor": "attendance",
+      "count": 17,
+      "status": "present"
+    },
+    "materials": {
+      "sensor": "materials",
+      "item": "pipe",
+      "qty": 92,
+      "unit": "pcs"
+    },
+    "temperature": {
+      "sensor": "temperature",
+      "celsius": 24.3,
+      "humidity_pct": 52.3
+    }
+  },
+  "assigned_to": "site_supervisor",
+  "actions_required": [
+    "Check anomaly reports and historical data for more information."
+  ]
+}

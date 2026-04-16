@@ -1,0 +1,53 @@
+{
+  "work_order_id": "WO-20260416_054824",
+  "created_at": "2026-04-16T05:48:24.468559",
+  "priority": "LOW",
+  "status": "OPEN",
+  "site_status": "LOW",
+  "description": "Recheck historical data for attendance anomaly",
+  "anomalies": [],
+  "trends": {
+    "count": {
+      "slope": 0.9011,
+      "direction": "RISING",
+      "predicted_next": 45.165
+    },
+    "qty": {
+      "slope": 0.0055,
+      "direction": "STABLE",
+      "predicted_next": 63.786
+    },
+    "celsius": {
+      "slope": 0.0511,
+      "direction": "RISING",
+      "predicted_next": 28.246
+    },
+    "humidity_pct": {
+      "slope": -1.1044,
+      "direction": "FALLING",
+      "predicted_next": 37.51
+    }
+  },
+  "sensor_snapshot": {
+    "attendance": {
+      "sensor": "attendance",
+      "count": 28,
+      "status": "absent"
+    },
+    "materials": {
+      "sensor": "materials",
+      "item": "bolt",
+      "qty": 82,
+      "unit": "pcs"
+    },
+    "temperature": {
+      "sensor": "temperature",
+      "celsius": 28.0,
+      "humidity_pct": 37.7
+    }
+  },
+  "assigned_to": "site_supervisor",
+  "actions_required": [
+    "Recheck historical data for attendance anomaly"
+  ]
+}

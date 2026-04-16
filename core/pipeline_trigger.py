@@ -70,6 +70,12 @@ class PipelineTrigger:
                                 f"{data.get('sensor', '?')} "
                                 f"buffer={len(self.buffer._data)}"
                             )
+                            try:
+                                from db.db_agent_singleton import get_db
+                                sensor_type = data.get("sensor", "unknown")
+                                get_db().save_sensor_reading(sensor_type, data)
+                            except Exception:
+                                pass
             except Exception:
                 pass
 

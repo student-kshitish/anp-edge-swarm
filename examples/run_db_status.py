@@ -37,3 +37,11 @@ for wo in db.fetch("work_orders", limit=5):
         f"[{wo.get('priority', '?')}] "
         f"{wo.get('description', '')[:40]}"
     )
+
+print(f"\nPredictions:")
+for p in db.fetch("predictions", limit=3):
+    print(
+        f"  {p.get('timestamp', '')[:19]} "
+        f"status={p.get('status', '?')} "
+        f"urgency={p.get('urgency', '?')}"
+    )
