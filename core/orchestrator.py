@@ -18,6 +18,7 @@ from ml.task_decomposer import TaskDecomposer
 from ml.parallel_executor import ParallelExecutor
 from ml.result_assembler import ResultAssembler
 from ml.inference_server import start_server as start_inference_server
+from agents.action_agent import ActionAgent
 
 logger = logging.getLogger(__name__)
 
@@ -243,6 +244,8 @@ def run_intent(intent: dict, use_llm: bool = True,
     _goal = intent.get("goal", "site_check")
     _decision_input = final if final else summary
 
+    result = {"summary": summary, "ml_pipeline": final, "decision": "computing..."}
+
     def _run_decision():
         d = make_decision(_decision_input, _goal)
         print("\n" + "=" * 60)
@@ -253,12 +256,20 @@ def run_intent(intent: dict, use_llm: bool = True,
         if _t0:
             print(f"[TIMER] Decision done in {time.time() - _t0:.2f}s")
 
+        action_agent = ActionAgent()
+        action_result = action_agent.execute(
+            _decision_input,
+            summary
+        )
+        print(f"[ACTION] Actions taken: {action_result['actions_taken']}")
+        result["action"] = action_result
+
     threading.Thread(target=_run_decision, daemon=True,
                      name="decision-agent").start()
 
     print(f"\n[FACTORY] Status: {factory.status()}")
 
-    return {"summary": summary, "ml_pipeline": final, "decision": "computing..."}
+    return result
 
 
 # ------------------------------------------------------------------ #
