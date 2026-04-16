@@ -19,8 +19,15 @@ from ml.parallel_executor import ParallelExecutor
 from ml.result_assembler import ResultAssembler
 from ml.inference_server import start_server as start_inference_server
 from agents.action_agent import ActionAgent
+from db.store import save_sensor_reading
+from db.schema import init_db
+from db.db_agent_singleton import get_db
+from swarm.node_identity import get_node_id
 
 logger = logging.getLogger(__name__)
+
+# Initialise the local SQLite database once at import time.
+init_db()
 
 ORCHESTRATOR_ID = "orchestrator"
 
@@ -131,6 +138,19 @@ def run_intent(intent: dict, use_llm: bool = True,
                     collected[sensor].append(data)
                     _print_reading(sensor, data)
                     total_so_far = sum(len(v) for v in collected.values())
+                    try:
+                        save_sensor_reading(
+                            sensor_type=sensor,
+                            raw_data=data,
+                            node_id=get_node_id(),
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        db = get_db()
+                        db.save_sensor_reading(sensor, data)
+                    except Exception:
+                        pass
 
         # Early-exit: min time elapsed AND enough readings gathered
         if elapsed >= _MIN_WAIT and total_so_far >= target_readings:
@@ -234,6 +254,11 @@ def run_intent(intent: dict, use_llm: bool = True,
         print("=" * 60)
         final = assembler.assemble(ml_results)
         print("=" * 60 + "\n")
+
+        try:
+            get_db().save_prediction(final)
+        except Exception:
+            pass
 
     if _t0:
         print(f"[TIMER] ML pipeline done in {time.time() - _t0:.2f}s")

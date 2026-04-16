@@ -42,9 +42,33 @@ def handle_client(conn, addr):
         request = json.loads(data.decode())
 
         # ------------------------------------------------------------------ #
+        # Route: database queries
+        # ------------------------------------------------------------------ #
+        if request.get("type") == "db_stats":
+            from db.query import get_stats
+            response = {"success": True, "stats": get_stats()}
+
+        elif request.get("type") == "db_readings":
+            from db.query import get_recent_readings
+            sensor_type = request.get("sensor_type")
+            limit       = int(request.get("limit", 20))
+            response = {
+                "success":  True,
+                "readings": get_recent_readings(sensor_type=sensor_type, limit=limit),
+            }
+
+        elif request.get("type") == "db_workorders":
+            from db.query import get_work_orders
+            status = request.get("status", "OPEN")
+            response = {
+                "success":     True,
+                "work_orders": get_work_orders(status=status),
+            }
+
+        # ------------------------------------------------------------------ #
         # Route: autonomous status query
         # ------------------------------------------------------------------ #
-        if request.get("type") == "autonomous_status":
+        elif request.get("type") == "autonomous_status":
             if _swarm_mind is not None:
                 st = _swarm_mind.status()
                 response = {

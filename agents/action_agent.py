@@ -6,6 +6,10 @@ import json
 import os
 from datetime import datetime
 from agents.base_agent import BaseAgent
+from db.store import save_work_order as db_save_wo
+from db.store import save_prediction
+from db.db_agent_singleton import get_db
+from swarm.node_identity import get_node_id
 
 LOGS_DIR = "logs"
 ACTIONS_LOG = "logs/actions.jsonl"
@@ -30,9 +34,14 @@ class ActionAgent(BaseAgent):
         self._log_action(decision, sensor_summary)
         actions_taken.append("logged to actions.jsonl")
 
-        # Always create work order
+        # Always create work order and persist prediction to DB
         wo_path = self._create_work_order(decision, sensor_summary)
         actions_taken.append(f"work order: {wo_path}")
+
+        try:
+            save_prediction(decision, node_id=get_node_id())
+        except Exception:
+            pass
 
         # If WARNING or higher: print alert
         if status in ("WARNING", "CRITICAL") or urgency in ("HIGH", "CRITICAL"):
@@ -89,6 +98,20 @@ class ActionAgent(BaseAgent):
         with open(filename, "w") as f:
             json.dump(wo, f, indent=2)
         print(f"[ACTION] Work order created: {filename}")
+
+        try:
+            db_save_wo(wo, node_id=get_node_id())
+            print(f"[DB] Work order saved to database")
+        except Exception as e:
+            print(f"[DB] Work order DB save failed: {e}")
+
+        try:
+            db = get_db()
+            db.save_work_order(wo)
+            print(f"[DB-AGENT] Work order saved to {db.get_db_type()}")
+        except Exception as e:
+            print(f"[DB-AGENT] Save failed: {e}")
+
         return filename
 
     def _send_alert(self, decision: dict, summary: dict):

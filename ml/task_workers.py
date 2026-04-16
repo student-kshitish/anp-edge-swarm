@@ -245,16 +245,39 @@ def _cosine_similarity(a: dict, b: dict) -> float:
 
 
 def run_history(data: dict, window: list) -> TaskResult:
-    """Load history.jsonl and find best cosine-similarity match."""
+    """
+    Query SQLite for past predictions and find the best cosine-similarity
+    match against current sensor readings.
+
+    Each prediction row stores the full assembled ML result in raw_json,
+    which includes clean_data (the cleaned sensor snapshot at that time).
+    The row's status column is the outcome label.
+    """
     t0 = time.perf_counter()
     node_id = _safe_node_id()
-    history_path = "logs/history.jsonl"
     try:
-        try:
-            with open(history_path, "r") as fh:
-                entries = [json.loads(line) for line in fh if line.strip()]
-        except FileNotFoundError:
-            entries = []
+        from db.db_agent_singleton import get_db
+        db   = get_db()
+        rows = db.get_history(limit=50)
+
+        # Build history entries compatible with the cosine similarity logic.
+        # Format: {"sensor_data": {numeric fields...}, "outcome": status, "timestamp": ...}
+        entries = []
+        for row in rows:
+            raw = row.get("raw_json")
+            if not raw:
+                continue
+            try:
+                assembled = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            # clean_data holds the cleaned per-field sensor values
+            sensor_data = assembled.get("clean_data", {})
+            entries.append({
+                "sensor_data": sensor_data,
+                "outcome":     row.get("status", ""),
+                "timestamp":   row.get("timestamp", ""),
+            })
 
         if not entries:
             duration_ms = (time.perf_counter() - t0) * 1000
@@ -279,10 +302,10 @@ def run_history(data: dict, window: list) -> TaskResult:
         matched_date = best_entry.get("timestamp", "")[:10] if best_entry else ""
 
         result = {
-            "matched": best_score > 0.5,
-            "similarity": round(best_score, 4),
-            "matched_date": matched_date,
-            "past_outcome": past_outcome,
+            "matched":        best_score > 0.5,
+            "similarity":     round(best_score, 4),
+            "matched_date":   matched_date,
+            "past_outcome":   past_outcome,
             "recommendation": f"Based on past outcome: {past_outcome}" if past_outcome else "",
         }
         duration_ms = (time.perf_counter() - t0) * 1000
