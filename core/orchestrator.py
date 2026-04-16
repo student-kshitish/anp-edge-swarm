@@ -256,9 +256,17 @@ def run_intent(intent: dict, use_llm: bool = True,
         print("=" * 60 + "\n")
 
         try:
-            get_db().save_prediction(final)
-        except Exception:
-            pass
+            from db.db_agent_singleton import get_db
+            if final and isinstance(final, dict):
+                db  = get_db()
+                rid = db.save_prediction(final)
+                print(f"[DB] Prediction saved: {rid[:8] if rid else 'failed'}")
+            else:
+                print(f"[DB] Prediction skip: final={type(final)} empty={not final}")
+        except Exception as e:
+            import traceback
+            print(f"[DB] Prediction save error: {e}")
+            traceback.print_exc()
 
     if _t0:
         print(f"[TIMER] ML pipeline done in {time.time() - _t0:.2f}s")

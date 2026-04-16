@@ -1,0 +1,53 @@
+{
+  "work_order_id": "WO-20260416_055601",
+  "created_at": "2026-04-16T05:56:01.490562",
+  "priority": "LOW",
+  "status": "OPEN",
+  "site_status": "LOW",
+  "description": "Review current trends and historical data for anomalies",
+  "anomalies": [],
+  "trends": {
+    "count": {
+      "slope": 1.5175,
+      "direction": "RISING",
+      "predicted_next": 43.205
+    },
+    "celsius": {
+      "slope": -0.1727,
+      "direction": "FALLING",
+      "predicted_next": 22.933
+    },
+    "humidity_pct": {
+      "slope": -2.7339,
+      "direction": "FALLING",
+      "predicted_next": 11.882
+    },
+    "qty": {
+      "slope": -0.2657,
+      "direction": "FALLING",
+      "predicted_next": 51.282
+    }
+  },
+  "sensor_snapshot": {
+    "attendance": {
+      "sensor": "attendance",
+      "count": 41,
+      "status": "absent"
+    },
+    "temperature": {
+      "sensor": "temperature",
+      "celsius": 23.2,
+      "humidity_pct": 30.3
+    },
+    "materials": {
+      "sensor": "materials",
+      "item": "panel",
+      "qty": 4,
+      "unit": "pcs"
+    }
+  },
+  "assigned_to": "site_supervisor",
+  "actions_required": [
+    "Review current trends and historical data for anomalies"
+  ]
+}

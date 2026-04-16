@@ -1,0 +1,53 @@
+{
+  "work_order_id": "WO-20260416_055530",
+  "created_at": "2026-04-16T05:55:30.518894",
+  "priority": "LOW",
+  "status": "OPEN",
+  "site_status": "LOW",
+  "description": "Check anomaly details",
+  "anomalies": [],
+  "trends": {
+    "count": {
+      "slope": 0.0,
+      "direction": "STABLE",
+      "predicted_next": 10.0
+    },
+    "celsius": {
+      "slope": 0.0,
+      "direction": "STABLE",
+      "predicted_next": 21.1
+    },
+    "humidity_pct": {
+      "slope": 0.0,
+      "direction": "STABLE",
+      "predicted_next": 61.7
+    },
+    "qty": {
+      "slope": 0.0,
+      "direction": "STABLE",
+      "predicted_next": 76.0
+    }
+  },
+  "sensor_snapshot": {
+    "attendance": {
+      "sensor": "attendance",
+      "count": 10,
+      "status": "present"
+    },
+    "temperature": {
+      "sensor": "temperature",
+      "celsius": 21.1,
+      "humidity_pct": 61.7
+    },
+    "materials": {
+      "sensor": "materials",
+      "item": "panel",
+      "qty": 76,
+      "unit": "pcs"
+    }
+  },
+  "assigned_to": "site_supervisor",
+  "actions_required": [
+    "Check anomaly details"
+  ]
+}
