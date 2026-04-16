@@ -1,0 +1,62 @@
+{
+  "work_order_id": "WO-20260416_044008",
+  "created_at": "2026-04-16T04:40:08.093159",
+  "priority": "LOW",
+  "status": "OPEN",
+  "site_status": "LOW",
+  "description": "Review sensor data for materials pipe",
+  "anomalies": [],
+  "trends": {
+    "count": {
+      "slope": 6.0,
+      "direction": "RISING",
+      "predicted_next": 100.667
+    },
+    "celsius": {
+      "slope": -0.55,
+      "direction": "FALLING",
+      "predicted_next": 26.2
+    },
+    "humidity_pct": {
+      "slope": -5.3,
+      "direction": "FALLING",
+      "predicted_next": 1.533
+    },
+    "qty": {
+      "slope": 42.5,
+      "direction": "RISING",
+      "predicted_next": 561.0
+    }
+  },
+  "sensor_snapshot": {
+    "attendance": {
+      "count": 3,
+      "latest": {
+        "sensor": "attendance",
+        "count": 39,
+        "status": "absent"
+      }
+    },
+    "temperature": {
+      "count": 3,
+      "latest": {
+        "sensor": "temperature",
+        "celsius": 33.7,
+        "humidity_pct": 69.3
+      }
+    },
+    "materials": {
+      "count": 3,
+      "latest": {
+        "sensor": "materials",
+        "item": "pipe",
+        "qty": 90,
+        "unit": "pcs"
+      }
+    }
+  },
+  "assigned_to": "site_supervisor",
+  "actions_required": [
+    "Review sensor data for materials pipe"
+  ]
+}

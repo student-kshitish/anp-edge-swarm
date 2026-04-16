@@ -256,16 +256,22 @@ def run_intent(intent: dict, use_llm: bool = True,
         if _t0:
             print(f"[TIMER] Decision done in {time.time() - _t0:.2f}s")
 
-        action_agent = ActionAgent()
-        action_result = action_agent.execute(
-            _decision_input,
-            summary
-        )
-        print(f"[ACTION] Actions taken: {action_result['actions_taken']}")
-        result["action"] = action_result
+        try:
+            action_agent = ActionAgent()
+            action_result = action_agent.execute(
+                _decision_input,
+                summary
+            )
+            print(f"[ACTION] Actions taken: {action_result['actions_taken']}")
+            result["action"] = action_result
+        except Exception as e:
+            import traceback
+            print(f"[ACTION] Error: {e}")
+            traceback.print_exc()
 
-    threading.Thread(target=_run_decision, daemon=True,
+    threading.Thread(target=_run_decision, daemon=False,
                      name="decision-agent").start()
+    time.sleep(0.1)  # give thread time to start
 
     print(f"\n[FACTORY] Status: {factory.status()}")
 
