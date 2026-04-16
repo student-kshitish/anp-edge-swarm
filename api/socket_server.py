@@ -10,8 +10,20 @@ sys.path.insert(0, os.path.abspath("."))
 HOST = "127.0.0.1"
 PORT = 9000
 
+# Holds a SwarmMind instance when autonomous mode is active.
+# Set by run_autonomous.py via set_swarm_mind().
+_swarm_mind = None
+
+
+def set_swarm_mind(mind) -> None:
+    """Register the active SwarmMind so status queries can reach it."""
+    global _swarm_mind
+    _swarm_mind = mind
+
+
 def handle_client(conn, addr):
     print(f"[SOCKET] Request from {addr}")
+    elapsed = 0
     try:
         # Read 4-byte length prefix
         raw_len = conn.recv(4)
@@ -28,28 +40,54 @@ def handle_client(conn, addr):
             data += chunk
 
         request = json.loads(data.decode())
-        user_text = request.get("text", "")
 
-        print(f"[SOCKET] Intent: {user_text}")
+        # ------------------------------------------------------------------ #
+        # Route: autonomous status query
+        # ------------------------------------------------------------------ #
+        if request.get("type") == "autonomous_status":
+            if _swarm_mind is not None:
+                st = _swarm_mind.status()
+                response = {
+                    "success":         True,
+                    "uptime_seconds":  st["uptime_seconds"],
+                    "known_devices":   st["known_devices"],
+                    "pipeline_cycles": st["pipeline_cycles"],
+                    "autonomous":      True,
+                    "last_action":     "work order created",
+                    "status":          "monitoring",
+                }
+            else:
+                response = {
+                    "success":    True,
+                    "autonomous": False,
+                    "status":     "idle — autonomous mode not started",
+                }
 
-        t0 = time.time()
+        # ------------------------------------------------------------------ #
+        # Route: normal intent query
+        # ------------------------------------------------------------------ #
+        else:
+            user_text = request.get("text", "")
+            print(f"[SOCKET] Intent: {user_text}")
 
-        from core.intent_parser import parse_intent_llm
-        from core.orchestrator import run_intent
+            t0 = time.time()
 
-        intent = parse_intent_llm(user_text)
-        result = run_intent(intent, use_llm=False)
+            from core.intent_parser import parse_intent_llm
+            from core.orchestrator import run_intent
 
-        elapsed = int((time.time() - t0) * 1000)
+            intent = parse_intent_llm(user_text)
+            result = run_intent(intent, use_llm=False)
 
-        response = {
-            "success":     True,
-            "intent":      intent,
-            "summary":     result.get("summary", {}),
-            "decision":    result.get("decision", ""),
-            "ml_pipeline": result.get("ml_pipeline", {}),
-            "elapsed_ms":  elapsed
-        }
+            elapsed = int((time.time() - t0) * 1000)
+
+            response = {
+                "success":     True,
+                "intent":      intent,
+                "summary":     result.get("summary", {}),
+                "decision":    result.get("decision", ""),
+                "ml_pipeline": result.get("ml_pipeline", {}),
+                "elapsed_ms":  elapsed,
+            }
 
     except Exception as e:
         response = {
