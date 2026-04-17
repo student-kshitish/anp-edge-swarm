@@ -99,6 +99,16 @@ class ActionAgent(BaseAgent):
             json.dump(wo, f, indent=2)
         print(f"[ACTION] Work order created: {filename}")
 
+        # Notify subscribers that a work order was created
+        try:
+            from bus.event_bus import get_event_bus
+            get_event_bus().publish(
+                "action.workorder",
+                {"wo_path": filename, "priority": wo.get("priority", "LOW")},
+            )
+        except Exception:
+            pass
+
         try:
             db_save_wo(wo, node_id=get_node_id())
             print(f"[DB] Work order saved to database")
@@ -133,6 +143,17 @@ class ActionAgent(BaseAgent):
         print("=" * 60)
         print()
 
+        # Publish alert event so subscribers (dashboards, monitors) react
+        try:
+            from bus.event_bus import get_event_bus
+            get_event_bus().publish(
+                "action.alert",
+                {"urgency": urgency, "status": status},
+                priority=urgency,
+            )
+        except Exception:
+            pass
+
     def _emergency_escalation(self, decision: dict, summary: dict):
         ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         filename = f"{LOGS_DIR}/EMERGENCY_{ts}.json"
@@ -146,3 +167,18 @@ class ActionAgent(BaseAgent):
         with open(filename, "w") as f:
             json.dump(emergency, f, indent=2)
         print(f"[ACTION] EMERGENCY file written: {filename}")
+
+        # CRITICAL priority → synchronous delivery, all subscribers notified before return
+        try:
+            from bus.event_bus import get_event_bus
+            get_event_bus().publish(
+                "action.emergency",
+                {
+                    "filename":  filename,
+                    "urgency":   decision.get("action_urgency", "CRITICAL"),
+                    "status":    decision.get("status", "CRITICAL"),
+                },
+                priority="CRITICAL",
+            )
+        except Exception:
+            pass

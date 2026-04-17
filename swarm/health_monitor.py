@@ -57,7 +57,8 @@ class HealthMonitor:
                 alive = self._ping_node(ip)
 
                 with self._lock:
-                    if node_id not in self.node_health:
+                    is_new = node_id not in self.node_health
+                    if is_new:
                         self.node_health[node_id] = {
                             "status":      "alive",
                             "last_seen":   time.time(),
@@ -66,29 +67,52 @@ class HealthMonitor:
                             "response_ms": 0,
                         }
 
-                    h = self.node_health[node_id]
-                    h["ping_count"] += 1
-
-                    if alive["success"]:
-                        h["status"]      = "alive"
-                        h["last_seen"]   = time.time()
-                        h["fail_count"]  = 0
-                        h["response_ms"] = alive["ms"]
-                    else:
-                        h["fail_count"] += 1
-                        h["status"]      = "degraded"
-                        print(
-                            f"[HEALTH] Node {node_id[:12]} "
-                            f"ping failed ({h['fail_count']}/{self.MAX_RETRIES})"
+                if is_new:
+                    try:
+                        from bus.event_bus import get_event_bus
+                        get_event_bus().publish(
+                            "node.joined",
+                            {"node_id": node_id, "ip": ip},
                         )
+                    except Exception:
+                        pass
 
-                        if h["fail_count"] >= self.MAX_RETRIES:
-                            h["status"] = "dead"
-                            print(f"[HEALTH] !! Node {node_id[:12]} declared DEAD")
-                            self._on_node_dead(node_id, info)
+                h = self.node_health[node_id]
+                h["ping_count"] += 1
+
+                if alive["success"]:
+                    h["status"]      = "alive"
+                    h["last_seen"]   = time.time()
+                    h["fail_count"]  = 0
+                    h["response_ms"] = alive["ms"]
+                else:
+                    h["fail_count"] += 1
+                    h["status"]      = "degraded"
+                    print(
+                        f"[HEALTH] Node {node_id[:12]} "
+                        f"ping failed ({h['fail_count']}/{self.MAX_RETRIES})"
+                    )
+
+                    if h["fail_count"] >= self.MAX_RETRIES:
+                        h["status"] = "dead"
+                        print(f"[HEALTH] !! Node {node_id[:12]} declared DEAD")
+                        self._on_node_dead(node_id, info)
+                        try:
+                            from bus.event_bus import get_event_bus
+                            get_event_bus().publish(
+                                "node.dead",
+                                {
+                                    "node_id":   node_id,
+                                    "last_seen": h["last_seen"],
+                                },
+                                priority="CRITICAL",
+                            )
+                        except Exception:
+                            pass
 
             # Detect nodes that stopped appearing in the peer list
             now = time.time()
+            timed_out = []
             with self._lock:
                 for node_id, h in self.node_health.items():
                     if (
@@ -96,7 +120,19 @@ class HealthMonitor:
                         and h["status"] != "dead"
                     ):
                         h["status"] = "dead"
+                        timed_out.append((node_id, h["last_seen"]))
                         print(f"[HEALTH] Node {node_id[:12]} timed out")
+
+            for node_id, last_seen in timed_out:
+                try:
+                    from bus.event_bus import get_event_bus
+                    get_event_bus().publish(
+                        "node.dead",
+                        {"node_id": node_id, "last_seen": last_seen},
+                        priority="CRITICAL",
+                    )
+                except Exception:
+                    pass
 
             time.sleep(self.PING_INTERVAL)
 

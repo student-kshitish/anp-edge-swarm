@@ -62,4 +62,14 @@ class SensorAgent(BaseAgent):
             sent = self.send(self.report_to, payload)
             logger.debug("[%s] sent reading to %s (ok=%s): %s",
                          self.agent_id, self.report_to, sent, reading)
+            # Publish to event bus so any subscriber wakes up immediately
+            try:
+                from bus.event_bus import get_event_bus
+                get_event_bus().publish(
+                    "sensor.reading",
+                    reading,
+                    sender_id=self.agent_id,
+                )
+            except Exception:
+                pass
             time.sleep(3)

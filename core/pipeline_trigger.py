@@ -31,10 +31,16 @@ class PipelineTrigger:
 
     def start(self):
         self.running = True
-        # Subscribe before starting threads so no readings are dropped
-        # if sensors are already running when start() is called.
+        # Subscribe to message bus (legacy path — keeps existing behaviour)
         from bus.message_bus import bus as _bus
         _bus.subscribe("swarm-mind")
+        # Subscribe to event bus (event-driven path — no polling required)
+        from bus.event_bus import get_event_bus
+        get_event_bus().subscribe(
+            "sensor.reading",
+            self._on_sensor_event,
+            agent_id="pipeline-trigger",
+        )
         threading.Thread(
             target=self._collect_loop,
             daemon=True,
@@ -117,6 +123,12 @@ class PipelineTrigger:
             except Exception as e:
                 print(f"[PIPELINE] Error: {e}")
                 time.sleep(5)
+
+    def _on_sensor_event(self, event: dict):
+        """EventBus callback — ingest sensor readings published by any agent."""
+        reading = event.get("data", {})
+        if isinstance(reading, dict) and reading:
+            self.buffer.add(reading)
 
     def stop(self):
         self.running = False
