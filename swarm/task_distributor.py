@@ -226,3 +226,124 @@ def _tcp_send_with_retry(addr: str, port: int, msg: dict, node_id: str = "?") ->
         flush=True,
     )
     return False
+
+
+# ------------------------------------------------------------------ #
+# TaskDistributor — stateful class for health-monitor integration
+# ------------------------------------------------------------------ #
+
+class TaskDistributor:
+    """
+    Stateful wrapper around distribute_tasks that tracks in-flight assignments
+    so HealthMonitor can retrieve and reassign them when a peer dies.
+    """
+
+    def __init__(self):
+        # task_id → {type, node_id, assigned_at, sensor_type}
+        self._active_tasks: dict[str, dict] = {}
+        self._lock = __import__("threading").Lock()
+
+    # ------------------------------------------------------------------
+    # Active-task bookkeeping (called by distribute_tasks wrapper)
+    # ------------------------------------------------------------------
+
+    def record_task(
+        self,
+        task_id:     str,
+        task_type:   str,
+        node_id:     str,
+        sensor_type: str,
+    ) -> None:
+        with self._lock:
+            self._active_tasks[task_id] = {
+                "type":        task_type,
+                "node_id":     node_id,
+                "assigned_at": __import__("time").time(),
+                "sensor_type": sensor_type,
+            }
+
+    def complete_task(self, task_id: str) -> None:
+        with self._lock:
+            self._active_tasks.pop(task_id, None)
+
+    # ------------------------------------------------------------------
+    # Health-monitor API
+    # ------------------------------------------------------------------
+
+    def get_pending_tasks(self, node_id: str) -> list:
+        """Return all tasks currently assigned to *node_id* that haven't completed."""
+        with self._lock:
+            return [
+                {"task_id": tid, **info}
+                for tid, info in self._active_tasks.items()
+                if info["node_id"] == node_id
+            ]
+
+    def reassign_task(self, task: dict, alive_peers: dict) -> None:
+        """Pick the best available peer by benchmark score and re-send the task."""
+        task_id = task.get("task_id", "unknown")
+
+        # Score each candidate peer — prefer high composite benchmark
+        def _peer_score(peer_info: dict) -> float:
+            inner = peer_info.get("caps", peer_info)
+            bench = inner.get("benchmark", {})
+            composite = bench.get("composite", 0)
+            if composite > 0:
+                return composite
+            ram  = float(inner.get("ram_gb",    0))
+            cpu  = float(inner.get("cpu_cores", 0))
+            return ram * 2.0 + cpu * 1.5
+
+        best_id   = max(alive_peers, key=lambda pid: _peer_score(alive_peers[pid]))
+        best_info = alive_peers[best_id]
+        best_addr = best_info.get("addr") or best_info.get("ip", "")
+
+        reassign_msg = {
+            "type":        "TASK_ASSIGN",
+            "task_id":     task_id,
+            "sensor_type": task.get("sensor_type", ""),
+            "report_to":   "orchestrator",
+            "reassigned":  True,
+        }
+
+        ok = _tcp_send_with_retry(best_addr, TASK_PORT, reassign_msg, best_id)
+
+        if ok:
+            with self._lock:
+                if task_id in self._active_tasks:
+                    self._active_tasks[task_id]["node_id"] = best_id
+            print(f"[SWARM] Task {task_id[:8]} reassigned to {best_id[:12]}")
+        else:
+            logger.warning(
+                "[SWARM] Reassignment of task %s failed — peer %s unreachable",
+                task_id[:8], best_id[:12],
+            )
+
+    def run_locally(self, task: dict) -> None:
+        """Execute *task* on this node as a last-resort fallback."""
+        task_type   = task.get("type", "unknown")
+        sensor_type = task.get("sensor_type", "")
+        print(f"[SWARM] Running {task_type} locally (fallback)")
+
+        try:
+            from ml.task_workers import (
+                run_clean, run_anomaly, run_trend, run_history, run_action,
+            )
+            _LOCAL_RUNNERS = {
+                "clean":   lambda: run_clean({}, []),
+                "anomaly": lambda: run_anomaly({}, []),
+                "trend":   lambda: run_trend({}, []),
+                "history": lambda: run_history({}, []),
+                "action":  lambda: run_action({}, {}, {}, sensor_type),
+            }
+            runner = _LOCAL_RUNNERS.get(task_type)
+            if runner:
+                result = runner()
+                logger.info(
+                    "[SWARM] Local fallback for %s completed: success=%s",
+                    task_type, result.success,
+                )
+            else:
+                logger.warning("[SWARM] No local runner for task type: %s", task_type)
+        except Exception as exc:
+            logger.error("[SWARM] Local fallback for %s failed: %s", task_type, exc)

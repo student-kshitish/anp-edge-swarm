@@ -1,0 +1,75 @@
+{
+  "EMERGENCY": true,
+  "timestamp": "2026-04-16T06:00:58.558789",
+  "decision": {
+    "status": "CRITICAL",
+    "clean_data": {
+      "attendance": {
+        "sensor": "attendance",
+        "count": 21,
+        "status": "absent"
+      },
+      "temperature": {
+        "sensor": "temperature",
+        "celsius": 21.9,
+        "humidity_pct": 70.4
+      },
+      "materials": {
+        "sensor": "materials",
+        "item": "bolt",
+        "qty": 28,
+        "unit": "pcs"
+      }
+    },
+    "anomalies_found": [],
+    "trends": {
+      "count": {
+        "slope": -1.4364,
+        "direction": "FALLING",
+        "predicted_next": -4.709
+      },
+      "celsius": {
+        "slope": -0.9409,
+        "direction": "FALLING",
+        "predicted_next": 12.982
+      },
+      "humidity_pct": {
+        "slope": -0.0755,
+        "direction": "FALLING",
+        "predicted_next": 53.175
+      },
+      "qty": {
+        "slope": -0.3545,
+        "direction": "FALLING",
+        "predicted_next": 29.509
+      }
+    },
+    "historical_match": {
+      "matched": false
+    },
+    "recommended_action": "Send alert to maintenance team",
+    "action_urgency": "CRITICAL",
+    "nodes_contributed": 5,
+    "failed_tasks": [],
+    "assembled_at": "2026-04-16T06:00:58.546998Z"
+  },
+  "sensor_data": {
+    "attendance": {
+      "sensor": "attendance",
+      "count": 21,
+      "status": "absent"
+    },
+    "temperature": {
+      "sensor": "temperature",
+      "celsius": 21.9,
+      "humidity_pct": 70.4
+    },
+    "materials": {
+      "sensor": "materials",
+      "item": "bolt",
+      "qty": 28,
+      "unit": "pcs"
+    }
+  },
+  "message": "CRITICAL EVENT - IMMEDIATE ACTION REQUIRED"
+}

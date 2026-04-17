@@ -10,6 +10,16 @@ Handles two peer-registry formats:
 import socket
 from ml.task_types import TASKS
 
+# Minimum capability requirements per task type.
+# "action" requires a live LLM; lighter tasks only need a composite threshold.
+TASK_REQUIREMENTS: dict[str, dict] = {
+    "action":  {"llm_available": True,  "min_composite": 40},
+    "trend":   {"llm_available": False, "min_composite": 20},
+    "anomaly": {"llm_available": False, "min_composite": 15},
+    "clean":   {"llm_available": False, "min_composite":  5},
+    "history": {"llm_available": False, "min_composite": 10},
+}
+
 
 class TaskDecomposer:
     """Assigns specialised tasks to nodes based on capability scores."""
@@ -51,7 +61,9 @@ class TaskDecomposer:
         )
         for nid, ncaps in scored:
             score = self._score_node(ncaps)
-            print(f"[DECOMPOSER] Node {nid[:12]:12s} score={score:.1f}")
+            bench = ncaps.get("benchmark", {})
+            src   = "bench" if bench.get("composite", 0) > 0 else "hw"
+            print(f"[DECOMPOSER] Node {nid[:12]:12s} score={score:.1f} [{src}]")
 
         plan: dict[str, dict] = {}
 
@@ -59,38 +71,54 @@ class TaskDecomposer:
             only_id, only_caps = scored[0]
             is_local = only_id == local_id
             for task in TASKS:
-                plan[task] = {"node_id": only_id,
-                               "local": is_local,
-                               "ip": only_caps["ip"]}
+                plan[task] = {
+                    "node_id": only_id,
+                    "local":   is_local,
+                    "ip":      only_caps["ip"],
+                }
                 print(f"[DECOMPOSER] {task:8s} -> {only_id[:12]} (local={is_local})")
             return plan
 
-        # Multiple nodes — assign by capability affinity
+        # Multiple nodes — filter by capability requirements, then assign
         ranked_ids  = [nid for nid, _ in scored]
         ranked_caps = {nid: caps for nid, caps in scored}
 
-        def _best_by(metric: str) -> str:
-            return max(scored, key=lambda kv: kv[1].get(metric, 0))[0]
+        def _eligible_for(task_type: str) -> list[str]:
+            """Return node IDs that meet the minimum requirements for task_type."""
+            eligible = [
+                nid for nid in ranked_ids
+                if self._node_can_run_task(task_type, ranked_caps[nid])
+            ]
+            # Always keep at least the highest-scored node as a last resort
+            return eligible if eligible else [ranked_ids[0]]
 
-        def _has_role(nid: str, role: str) -> bool:
-            return role in ranked_caps[nid].get("roles", [])
+        def _best_by(metric: str, candidates: list[str]) -> str:
+            return max(candidates, key=lambda nid: ranked_caps[nid].get(metric, 0))
 
-        # Action → prefer node with ollama_running; fall back to local
-        action_node = local_id
-        for nid in ranked_ids:
-            if self._has_ollama(ranked_caps[nid]):
-                action_node = nid
-                break
+        # Action → must have LLM; pick the fastest inference node
+        action_candidates = _eligible_for("action")
+        action_node = max(
+            action_candidates,
+            key=lambda nid: ranked_caps[nid].get("benchmark", {}).get("llm_tps", 0)
+            or (10.0 if self._has_ollama(ranked_caps[nid]) else 0.0),
+        )
 
-        trend_node   = _best_by("ram_gb")
-        anomaly_node = _best_by("cpu_cores")
+        trend_candidates   = _eligible_for("trend")
+        anomaly_candidates = _eligible_for("anomaly")
+        trend_node   = _best_by("ram_gb",    trend_candidates)
+        anomaly_node = _best_by("cpu_cores", anomaly_candidates)
 
         assigned        = {action_node, trend_node, anomaly_node}
         remaining_nodes = [nid for nid in ranked_ids if nid not in assigned] or ranked_ids
 
         task_to_node = {}
         for i, task in enumerate(["clean", "history"]):
-            task_to_node[task] = remaining_nodes[i % len(remaining_nodes)]
+            eligible = _eligible_for(task)
+            # Prefer nodes not already loaded with another task
+            idle = [nid for nid in eligible if nid not in assigned]
+            task_to_node[task] = (idle or eligible or remaining_nodes)[
+                i % len(idle or eligible or remaining_nodes)
+            ]
 
         assignment = {
             "action":  action_node,
@@ -130,6 +158,8 @@ class TaskDecomposer:
             "models":         caps.get("models")         or inner.get("models",         []),
             "ollama_running": caps.get("ollama_running") or inner.get("ollama_running", False),
             "ip":             caps.get("ip")             or caps.get("addr", "127.0.0.1"),
+            # Preserve benchmark data so _score_node and _node_can_run_task can use it
+            "benchmark":      caps.get("benchmark")      or inner.get("benchmark",      {}),
         }
 
     # ------------------------------------------------------------------
@@ -137,13 +167,19 @@ class TaskDecomposer:
     # ------------------------------------------------------------------
 
     def _score_node(self, caps: dict) -> float:
-        """Return a capability score. Accepts both raw and normalised cap dicts."""
-        # Handle nested format: caps may be inside "caps" key
-        if "caps" in caps and isinstance(caps["caps"], dict):
-            inner = caps["caps"]
-        else:
-            inner = caps
+        """
+        Return a capability score. Uses benchmark composite when available;
+        falls back to hardware spec scoring so existing nodes still rank correctly.
+        """
+        inner = caps.get("caps", caps) if isinstance(caps.get("caps"), dict) else caps
+        bench = inner.get("benchmark", {})
 
+        if bench.get("composite", 0) > 0:
+            score = bench["composite"]
+            print(f"[DECOMPOSER] Using benchmark score: {score:.1f}")
+            return score
+
+        # Fallback: hardware-spec heuristic
         ram    = float(inner.get("ram_gb",    0))
         cpu    = float(inner.get("cpu_cores", 0))
         roles  = inner.get("roles",  [])
@@ -151,17 +187,33 @@ class TaskDecomposer:
         ollama = inner.get("ollama_running", False)
 
         score = ram * 2.0 + cpu * 1.5
-
-        if "brain" in roles:
-            score += 30
-        if "gpu" in roles:
-            score += 40
-        if ollama:
-            score += 20
-        if models:
-            score += len(models) * 5
+        if "brain" in roles: score += 30
+        if "gpu"   in roles: score += 40
+        if ollama:           score += 20
+        if models:           score += len(models) * 5
 
         return round(score, 1)
+
+    def _node_can_run_task(self, task_type: str, caps: dict) -> bool:
+        """
+        Return True if *caps* satisfy the minimum requirements for *task_type*.
+        Nodes that lack an LLM are excluded from 'action' tasks; all other tasks
+        only require a minimum composite benchmark score.
+        """
+        reqs  = TASK_REQUIREMENTS.get(task_type, {})
+        inner = caps.get("caps", caps) if isinstance(caps.get("caps"), dict) else caps
+        bench = inner.get("benchmark", {})
+
+        if reqs.get("llm_available") and not bench.get("llm_available"):
+            return False
+
+        # If no benchmark data at all, allow the node (graceful degradation —
+        # unbenched nodes are treated as capable until proven otherwise).
+        if not bench:
+            return True
+
+        min_composite = reqs.get("min_composite", 0)
+        return bench.get("composite", 0) >= min_composite
 
     # ------------------------------------------------------------------
     # Helpers
