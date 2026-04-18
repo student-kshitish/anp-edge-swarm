@@ -1,0 +1,48 @@
+{
+  "work_order_id": "WO-20260418_055304",
+  "created_at": "2026-04-18T05:53:04.693843",
+  "priority": "LOW",
+  "status": "OPEN",
+  "site_status": "LOW",
+  "description": "No action required",
+  "anomalies": [],
+  "trends": {
+    "qty": {
+      "slope": 2.4338,
+      "direction": "RISING",
+      "predicted_next": 106.831
+    },
+    "celsius": {
+      "slope": 0.2049,
+      "direction": "RISING",
+      "predicted_next": 30.334
+    },
+    "humidity_pct": {
+      "slope": 0.4946,
+      "direction": "RISING",
+      "predicted_next": 52.933
+    },
+    "count": {
+      "slope": -0.1824,
+      "direction": "FALLING",
+      "predicted_next": 21.501
+    }
+  },
+  "sensor_snapshot": {
+    "materials": {
+      "sensor": "materials",
+      "item": "pipe",
+      "qty": 91,
+      "unit": "pcs"
+    },
+    "attendance": {
+      "sensor": "attendance",
+      "count": 19,
+      "status": "present"
+    }
+  },
+  "assigned_to": "site_supervisor",
+  "actions_required": [
+    "No action required"
+  ]
+}

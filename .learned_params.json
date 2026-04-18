@@ -1,0 +1,10 @@
+{
+  "anomaly_threshold": 2.7,
+  "confidence_min": 0.6,
+  "action_cooldown": 30,
+  "critical_threshold": 3.5,
+  "trust_score": {
+    "victus": 0.5,
+    "windows": 0.5
+  }
+}

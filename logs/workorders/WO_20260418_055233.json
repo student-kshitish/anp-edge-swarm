@@ -1,0 +1,48 @@
+{
+  "work_order_id": "WO-20260418_055233",
+  "created_at": "2026-04-18T05:52:33.847400",
+  "priority": "MEDIUM",
+  "status": "OPEN",
+  "site_status": "MEDIUM",
+  "description": "Send alert to maintenance team",
+  "anomalies": [],
+  "trends": {
+    "qty": {
+      "slope": -3.0931,
+      "direction": "FALLING",
+      "predicted_next": -4.652
+    },
+    "count": {
+      "slope": -1.5809,
+      "direction": "FALLING",
+      "predicted_next": -10.919
+    },
+    "celsius": {
+      "slope": -0.24,
+      "direction": "FALLING",
+      "predicted_next": 19.96
+    },
+    "humidity_pct": {
+      "slope": -3.0147,
+      "direction": "FALLING",
+      "predicted_next": 3.415
+    }
+  },
+  "sensor_snapshot": {
+    "materials": {
+      "sensor": "materials",
+      "item": "wire",
+      "qty": 1,
+      "unit": "pcs"
+    },
+    "temperature": {
+      "sensor": "temperature",
+      "celsius": 19.5,
+      "humidity_pct": 46.9
+    }
+  },
+  "assigned_to": "site_supervisor",
+  "actions_required": [
+    "Send alert to maintenance team"
+  ]
+}

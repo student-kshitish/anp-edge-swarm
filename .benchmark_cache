@@ -1,0 +1,11 @@
+{
+  "cpu_score": 65.83,
+  "mem_score": 60.92,
+  "llm_tps": 2.39,
+  "llm_available": true,
+  "disk_score": 99.76,
+  "net_latency_ms": 49.0,
+  "node_id": "a9a4102bcbf08794bb92d073cb15b0219078e1a6",
+  "timestamp": 1776491521.9974508,
+  "composite": 48.64
+}

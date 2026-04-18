@@ -1,0 +1,53 @@
+{
+  "work_order_id": "WO-20260418_055335",
+  "created_at": "2026-04-18T05:53:35.577850",
+  "priority": "MEDIUM",
+  "status": "OPEN",
+  "site_status": "MEDIUM",
+  "description": "Trigger investigation for falling attendance trend",
+  "anomalies": [],
+  "trends": {
+    "count": {
+      "slope": -0.3848,
+      "direction": "FALLING",
+      "predicted_next": 16.63
+    },
+    "qty": {
+      "slope": -0.6985,
+      "direction": "FALLING",
+      "predicted_next": 56.787
+    },
+    "celsius": {
+      "slope": 0.4324,
+      "direction": "RISING",
+      "predicted_next": 34.886
+    },
+    "humidity_pct": {
+      "slope": -0.2565,
+      "direction": "FALLING",
+      "predicted_next": 42.055
+    }
+  },
+  "sensor_snapshot": {
+    "temperature": {
+      "sensor": "temperature",
+      "celsius": 25.4,
+      "humidity_pct": 37.9
+    },
+    "attendance": {
+      "sensor": "attendance",
+      "count": 39,
+      "status": "present"
+    },
+    "materials": {
+      "sensor": "materials",
+      "item": "pipe",
+      "qty": 50,
+      "unit": "pcs"
+    }
+  },
+  "assigned_to": "site_supervisor",
+  "actions_required": [
+    "Trigger investigation for falling attendance trend"
+  ]
+}
