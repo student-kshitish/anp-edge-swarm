@@ -13,4 +13,5 @@ IP selection guide:
 PEER_IPS = [
     "192.168.1.11",   # Windows laptop
     "192.168.1.40",  # Victus Linux
+    "192.168.1.29",   # Android Termux
 ]
