@@ -12,7 +12,8 @@ from ml.parallel_executor import ParallelExecutor
 from ml.result_assembler import ResultAssembler
 from agents.action_agent import ActionAgent
 
-# Interval between ML pipeline runs after a successful cycle (seconds)
+# Default interval between ML pipeline runs (seconds).
+# Overridden at runtime by GoalManager.get_recommended_interval().
 _PIPELINE_COOLDOWN = 30
 
 
@@ -28,6 +29,8 @@ class PipelineTrigger:
         self.action_agent = ActionAgent()
         self.running      = False
         self.cycle_count  = 0
+        # Set by SwarmMind after construction to avoid circular import.
+        self.mind         = None
 
     def start(self):
         self.running = True
@@ -61,9 +64,6 @@ class PipelineTrigger:
         from bus.message_bus import bus
         while self.running:
             try:
-                # receive() returns one bus envelope or None:
-                # {"from": sender, "to": "swarm-mind", "message": payload, "ts": ...}
-                # SensorAgent payload: {"type": "sensor_reading", "data": {...}, ...}
                 envelope = bus.receive("swarm-mind", timeout=1)
                 if envelope:
                     payload = envelope.get("message", {})
@@ -95,7 +95,6 @@ class PipelineTrigger:
                     window = self.buffer.get_window()
                     peers  = self.get_peers()
 
-                    # Build latest per-sensor dict from the last 3 readings
                     latest: dict = {}
                     for reading in window[-3:]:
                         sensor = reading.get("sensor")
@@ -117,7 +116,44 @@ class PipelineTrigger:
                         f"— status={final.get('status', '?')}"
                     )
 
-                    time.sleep(_PIPELINE_COOLDOWN)
+                    # Record decision for self-improvement learning
+                    try:
+                        if self.mind is not None:
+                            decision_id = f"dec_{int(time.time())}_{self.cycle_count}"
+                            contributing = [
+                                v["node_id"] for v in plan.values()
+                                if isinstance(v, dict) and "node_id" in v
+                            ]
+                            self.mind.improvement.record_decision(
+                                decision_id=decision_id,
+                                decision_type="ml_pipeline",
+                                inputs={
+                                    "anomaly_count": len(
+                                        final.get("anomalies_found", [])),
+                                    "urgency":       final.get(
+                                        "action_urgency", "LOW"),
+                                    "status":        final.get("status", "OK"),
+                                    "contributing_nodes": contributing,
+                                },
+                                action_taken=final,
+                            )
+
+                            # Reflective decision — appended to final for downstream use
+                            decision = self.mind.reflection.reflect_and_decide(
+                                current_input=final,
+                                historical_data=self.mind.improvement.decision_history[-50:],
+                            )
+                            final["reflective_decision"] = decision
+                    except Exception:
+                        pass
+
+                    # Use goal manager's recommended interval if available
+                    interval = (
+                        self.mind.goals.get_recommended_interval()
+                        if self.mind is not None
+                        else _PIPELINE_COOLDOWN
+                    )
+                    time.sleep(interval)
                 else:
                     time.sleep(2)
             except Exception as e:

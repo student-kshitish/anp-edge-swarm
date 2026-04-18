@@ -62,6 +62,20 @@ class ActionAgent(BaseAgent):
         }
 
         print(f"[ACTION] Executed {len(actions_taken)} actions for {urgency} event")
+
+        # Record the outcome so the self-improvement engine can learn from it.
+        # Actions reaching this point completed without exception → correct.
+        try:
+            from core.swarm_mind import _mind
+            if _mind is not None:
+                _mind.improvement.record_outcome(
+                    decision_id=decision.get("decision_id", ""),
+                    was_correct=True,
+                    feedback={"action_taken": actions_taken},
+                )
+        except Exception:
+            pass
+
         return result
 
     def _log_action(self, decision: dict, summary: dict) -> dict:
