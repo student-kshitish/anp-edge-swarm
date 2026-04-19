@@ -6,13 +6,11 @@ import json
 import os
 from datetime import datetime
 from agents.base_agent import BaseAgent
-from db.store import save_work_order as db_save_wo
-from db.store import save_prediction
 from db.db_agent_singleton import get_db
 from swarm.node_identity import get_node_id
 
-LOGS_DIR = "logs"
-ACTIONS_LOG = "logs/actions.jsonl"
+LOGS_DIR      = "logs"
+ACTIONS_LOG   = "logs/actions.jsonl"
 WORKORDERS_DIR = "logs/workorders"
 
 
@@ -39,7 +37,8 @@ class ActionAgent(BaseAgent):
         actions_taken.append(f"work order: {wo_path}")
 
         try:
-            save_prediction(decision, node_id=get_node_id())
+            db = get_db()
+            db.save_prediction(decision)
         except Exception:
             pass
 
@@ -64,7 +63,6 @@ class ActionAgent(BaseAgent):
         print(f"[ACTION] Executed {len(actions_taken)} actions for {urgency} event")
 
         # Record the outcome so the self-improvement engine can learn from it.
-        # Actions reaching this point completed without exception → correct.
         try:
             from core.swarm_mind import _mind
             if _mind is not None:
@@ -92,7 +90,7 @@ class ActionAgent(BaseAgent):
         return entry
 
     def _create_work_order(self, decision: dict, summary: dict) -> str:
-        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        ts       = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         filename = f"{WORKORDERS_DIR}/WO_{ts}.json"
         wo = {
             "work_order_id":    f"WO-{ts}",
@@ -123,18 +121,13 @@ class ActionAgent(BaseAgent):
         except Exception:
             pass
 
-        try:
-            db_save_wo(wo, node_id=get_node_id())
-            print(f"[DB] Work order saved to database")
-        except Exception as e:
-            print(f"[DB] Work order DB save failed: {e}")
-
+        # Single DB save via the unified db_agent path
         try:
             db = get_db()
             db.save_work_order(wo)
-            print(f"[DB-AGENT] Work order saved to {db.get_db_type()}")
+            print(f"[DB] Work order saved to {db.get_db_type()}")
         except Exception as e:
-            print(f"[DB-AGENT] Save failed: {e}")
+            print(f"[DB] Work order save failed: {e}")
 
         return filename
 
@@ -157,7 +150,6 @@ class ActionAgent(BaseAgent):
         print("=" * 60)
         print()
 
-        # Publish alert event so subscribers (dashboards, monitors) react
         try:
             from bus.event_bus import get_event_bus
             get_event_bus().publish(
@@ -169,7 +161,7 @@ class ActionAgent(BaseAgent):
             pass
 
     def _emergency_escalation(self, decision: dict, summary: dict):
-        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        ts       = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         filename = f"{LOGS_DIR}/EMERGENCY_{ts}.json"
         emergency = {
             "EMERGENCY":   True,
@@ -182,15 +174,14 @@ class ActionAgent(BaseAgent):
             json.dump(emergency, f, indent=2)
         print(f"[ACTION] EMERGENCY file written: {filename}")
 
-        # CRITICAL priority → synchronous delivery, all subscribers notified before return
         try:
             from bus.event_bus import get_event_bus
             get_event_bus().publish(
                 "action.emergency",
                 {
-                    "filename":  filename,
-                    "urgency":   decision.get("action_urgency", "CRITICAL"),
-                    "status":    decision.get("status", "CRITICAL"),
+                    "filename": filename,
+                    "urgency":  decision.get("action_urgency", "CRITICAL"),
+                    "status":   decision.get("status", "CRITICAL"),
                 },
                 priority="CRITICAL",
             )

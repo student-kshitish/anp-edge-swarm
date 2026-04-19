@@ -8,9 +8,19 @@ import json
 import uuid
 from db.schema import get_connection, _lock, now
 
+_ALLOWED_TABLES = frozenset({
+    "sensor_readings", "work_orders", "predictions",
+    "peers", "sync_log", "telemetry_events",
+})
+
 
 def _record_id() -> str:
     return str(uuid.uuid4())
+
+
+def _check_table(table: str) -> None:
+    if table not in _ALLOWED_TABLES:
+        raise ValueError(f"Unknown table: {table!r}")
 
 
 def save_sensor_reading(sensor_type: str, raw_data: dict,
@@ -143,6 +153,7 @@ def save_prediction(result: dict, node_id: str = "local",
 
 
 def mark_synced(table: str, record_id: str) -> None:
+    _check_table(table)
     with _lock:
         conn = get_connection()
         conn.execute(

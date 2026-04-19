@@ -2,17 +2,18 @@
 core/intent_parser.py — Intent parsing with two strategies:
 
   parse_intent()     — fast keyword matching, no API, always works
-  parse_intent_llm() — Claude-powered, understands any natural language,
+  parse_intent_llm() — LLM-powered, understands any natural language,
                        falls back to parse_intent() on any error
 
   Responses are cached for _cache_ttl seconds to avoid redundant Ollama calls.
 """
 
 import json
-import os
 import time
 import logging
 import requests
+
+from config import OLLAMA_BASE_URL, OLLAMA_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,6 @@ KEYWORDS = {
     "materials":    ["materials", "inventory", "stock", "items", "supplies"],
 }
 
-# System prompt for the LLM parser
 _SYSTEM_PROMPT = """\
 You are an intent parser for a construction-site monitoring swarm.
 Given a user request, return ONLY a valid JSON object with these exact fields:
@@ -49,8 +49,11 @@ Rules:
 - Return ONLY the JSON object — no markdown, no explanation, no extra text.
 """
 
+# Shared session — reuses TCP connections across calls
+_session = requests.Session()
+
 # ------------------------------------------------------------------ #
-# Response cache (FIX 7)
+# Response cache
 # ------------------------------------------------------------------ #
 _cache: dict = {}
 _cache_ttl: int = 60   # seconds
@@ -67,19 +70,19 @@ def parse_intent_llm(user_text: str) -> dict:
     Cached for _cache_ttl seconds — repeated identical queries skip Ollama.
     Falls back to keyword-based parse_intent() if the API call fails.
     """
-    cache_key = user_text.strip().lower()
+    # Normalise cache key so "Check Temp" and "check temp" are the same
+    cache_key = " ".join(user_text.lower().split())
 
-    # Cache hit — skip Ollama entirely
     if cache_key in _cache:
         if time.time() - _cache[cache_key]["ts"] < _cache_ttl:
             print("[INTENT] Cache hit - skipping Ollama call")
             return _cache[cache_key]["result"]
 
     try:
-        response = requests.post(
-            "http://localhost:11434/api/chat",
+        response = _session.post(
+            f"{OLLAMA_BASE_URL}/api/chat",
             json={
-                "model": "llama3.2:3b",
+                "model": OLLAMA_MODEL,
                 "stream": False,
                 "messages": [
                     {
@@ -101,23 +104,26 @@ def parse_intent_llm(user_text: str) -> dict:
                     },
                 ],
             },
+            timeout=30,
         )
 
-        content = response.json()["message"]["content"]
+        content = response.json()["message"]["content"].strip()
 
-        content = content.strip()
+        # Strip markdown fences if present
         if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-        content = content.strip()
+            parts = content.split("```")
+            # parts[1] is the fenced block; strip optional "json" language tag
+            content = parts[1].lstrip("json").strip() if len(parts) > 1 else content
 
-        intent = json.loads(content)
+        # Find the outermost JSON object
+        start = content.find("{")
+        end   = content.rfind("}") + 1
+        if start == -1 or end == 0:
+            raise ValueError("No JSON object found in LLM response")
+        intent = json.loads(content[start:end])
+
         print("Parsed intent (LLM):", json.dumps(intent, indent=2))
-
-        # Store in cache
         _cache[cache_key] = {"result": intent, "ts": time.time()}
-
         return intent
 
     except Exception as e:
@@ -132,19 +138,9 @@ def parse_intent_llm(user_text: str) -> dict:
 def parse_intent(user_text: str) -> dict:
     """
     Parse plain English into a structured intent dict using keyword matching.
-
-    Example:
-        parse_intent("check attendance and temperature at site")
-        -> {
-            "goal": "site_check",
-            "data_required": ["attendance", "temperature"],
-            "priority": "normal",
-            "auto_spawn": True
-           }
     """
     text = user_text.lower()
 
-    # "all" shortcut
     if "all" in text.split():
         data_required = list(ALL_SENSORS)
     else:

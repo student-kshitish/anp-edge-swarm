@@ -8,6 +8,11 @@ orchestrator and returns a human-readable assessment + recommendation.
 import json
 import requests
 
+from config import OLLAMA_BASE_URL, OLLAMA_MODEL
+
+# Shared session — reuses TCP connections across calls
+_session = requests.Session()
+
 
 def make_decision(summary: dict, goal: str) -> str:
     """
@@ -22,10 +27,10 @@ def make_decision(summary: dict, goal: str) -> str:
         fallback if Ollama is unavailable.
     """
     try:
-        response = requests.post(
-            "http://localhost:11434/api/chat",
+        response = _session.post(
+            f"{OLLAMA_BASE_URL}/api/chat",
             json={
-                "model": "llama3.2:3b",
+                "model": OLLAMA_MODEL,
                 "stream": False,
                 "messages": [
                     {
@@ -47,6 +52,7 @@ def make_decision(summary: dict, goal: str) -> str:
                     },
                 ],
             },
+            timeout=30,
         )
         return response.json()["message"]["content"]
 

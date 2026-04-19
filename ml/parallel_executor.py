@@ -19,9 +19,10 @@ from ml.task_workers import (
     run_trend,
     run_history,
 )
+from config import MAX_PAYLOAD_BYTES
 
-REMOTE_PORT = 50006
-TASK_TIMEOUT = 15.0   # seconds — remote nodes need time to receive, infer, respond
+REMOTE_PORT  = 50006
+TASK_TIMEOUT = 15.0
 
 
 class ParallelExecutor:
@@ -32,27 +33,15 @@ class ParallelExecutor:
     # ------------------------------------------------------------------
 
     def execute(self, plan: dict, sensor_data: dict, window: list) -> dict:
-        """
-        Run all tasks according to plan.
-
-        Args:
-            plan:        Output of TaskDecomposer.decompose()
-            sensor_data: Latest cleaned (or raw) sensor reading dict
-            window:      Sliding window list from StreamBuffer
-
-        Returns:
-            dict mapping task_type -> TaskResult
-        """
         futures = {}
         results: dict[str, TaskResult] = {}
 
-        # action needs results of anomaly, trend, history — deferred below
         deferred_action = plan.get("action")
 
         with ThreadPoolExecutor(max_workers=len(TASKS)) as pool:
             for task_type, assignment in plan.items():
                 if task_type == "action":
-                    continue  # handled after other tasks complete
+                    continue
                 if assignment["local"]:
                     fut = pool.submit(
                         self._run_local_task, task_type, sensor_data, window
@@ -67,7 +56,6 @@ class ParallelExecutor:
                     )
                 futures[fut] = task_type
 
-            # Collect non-action results within timeout
             deadline = time.time() + TASK_TIMEOUT
             try:
                 for fut in as_completed(futures, timeout=max(0.1, deadline - time.time())):
@@ -83,23 +71,14 @@ class ParallelExecutor:
                         try:
                             results[task_type] = fut.result()
                         except Exception as e:
-                            results[task_type] = TaskResult(
-                                task_type=task_type,
-                                node_id="local",
-                                result={},
-                                duration_ms=0,
-                                success=False,
-                                error=str(e)
-                            )
+                            results[task_type] = self._failed_result(task_type, str(e))
 
-        # Ensure all non-action tasks have a result entry
         for task_type in TASKS:
             if task_type == "action":
                 continue
             if task_type not in results:
                 results[task_type] = self._failed_result(task_type, "timeout")
 
-        # Now run action (depends on anomaly/trend/history)
         if deferred_action is not None:
             action_result = self._run_action_task(
                 deferred_action,
@@ -147,7 +126,7 @@ class ParallelExecutor:
             payload = {
                 "task_type":   "action",
                 "sensor_data": sensor_data,
-                "window":      [],   # not needed for action
+                "window":      [],
                 "anomaly":     anomaly_data,
                 "trend":       trend_data,
                 "history":     history_data,
@@ -173,39 +152,39 @@ class ParallelExecutor:
         t0 = time.perf_counter()
         try:
             raw = json.dumps(payload).encode("utf-8")
-            with socket.create_connection((ip, REMOTE_PORT), timeout=TASK_TIMEOUT) as sock:
-                # Send length-prefixed message
-                length_prefix = len(raw).to_bytes(4, "big")
-                sock.sendall(length_prefix + raw)
+            if len(raw) > MAX_PAYLOAD_BYTES:
+                raise ValueError(f"Outgoing payload too large: {len(raw)} bytes")
 
-                # Read length-prefixed response
+            with socket.create_connection((ip, REMOTE_PORT), timeout=TASK_TIMEOUT) as sock:
+                sock.sendall(len(raw).to_bytes(4, "big") + raw)
+
                 resp_len_bytes = self._recv_exact(sock, 4)
                 resp_len = int.from_bytes(resp_len_bytes, "big")
                 resp_raw = self._recv_exact(sock, resp_len)
 
             data = json.loads(resp_raw.decode("utf-8"))
-            duration_ms = (time.perf_counter() - t0) * 1000
             return TaskResult(
                 task_type=data.get("task_type", task_type),
                 node_id=data.get("node_id", ip),
                 result=data.get("result", {}),
-                duration_ms=data.get("duration_ms", duration_ms),
+                duration_ms=data.get("duration_ms", (time.perf_counter() - t0) * 1000),
                 success=data.get("success", True),
                 error=data.get("error"),
             )
         except Exception as exc:
-            duration_ms = (time.perf_counter() - t0) * 1000
             return TaskResult(
                 task_type=task_type,
                 node_id=ip,
                 result={},
-                duration_ms=duration_ms,
+                duration_ms=(time.perf_counter() - t0) * 1000,
                 success=False,
                 error=str(exc),
             )
 
     @staticmethod
     def _recv_exact(sock: socket.socket, n: int) -> bytes:
+        if n > MAX_PAYLOAD_BYTES:
+            raise ValueError(f"Incoming message too large: {n} bytes")
         buf = b""
         while len(buf) < n:
             chunk = sock.recv(n - len(buf))

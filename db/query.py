@@ -6,6 +6,16 @@ All functions return plain dicts (sqlite3.Row already converted).
 import json
 from db.schema import get_connection
 
+_ALLOWED_TABLES = frozenset({
+    "sensor_readings", "work_orders", "predictions",
+    "peers", "sync_log", "telemetry_events",
+})
+
+
+def _check_table(table: str) -> None:
+    if table not in _ALLOWED_TABLES:
+        raise ValueError(f"Unknown table: {table!r}")
+
 
 def get_recent_readings(sensor_type: str = None,
                         limit: int = 100,
@@ -42,6 +52,7 @@ def get_recent_readings(sensor_type: str = None,
 
 
 def get_unsynced(table: str, limit: int = 50) -> list:
+    _check_table(table)
     conn = get_connection()
     rows = conn.execute(
         f"SELECT * FROM {table} WHERE synced=0 LIMIT ?",

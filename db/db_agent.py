@@ -20,6 +20,9 @@ import threading
 from datetime import datetime, timezone
 
 from swarm.node_identity import get_node_id
+from config import MAX_PAYLOAD_BYTES
+
+_ALLOWED_SYNC_TABLES = frozenset({"sensor_readings"})
 
 
 class DBAgent:
@@ -221,20 +224,28 @@ class DBAgent:
             "records": unsynced,
         }).encode()
 
+        if len(payload) > MAX_PAYLOAD_BYTES:
+            print(f"[DB-AGENT] Payload too large to send: {len(payload)} bytes")
+            return
+
+        sent = False
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(5)
         try:
             sock.connect((ip, 50011))
             sock.sendall(len(payload).to_bytes(4, "big") + payload)
+            sent = True
+        except Exception as e:
+            print(f"[DB-AGENT] Push to {ip} failed: {e}")
         finally:
             sock.close()
 
-        for r in unsynced:
-            rid = r.get("record_id")
-            if rid:
-                self.update("sensor_readings", rid, {"synced": 1})
-
-        print(f"[DB-AGENT] Synced {len(unsynced)} records to {ip}")
+        if sent:
+            for r in unsynced:
+                rid = r.get("record_id")
+                if rid:
+                    self.update("sensor_readings", rid, {"synced": 1})
+            print(f"[DB-AGENT] Synced {len(unsynced)} records to {ip}")
 
     def _sync_server(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -255,11 +266,16 @@ class DBAgent:
 
     def _handle_incoming(self, conn: socket.socket, addr: tuple):
         try:
+            conn.settimeout(10)
             raw_len = conn.recv(4)
             if not raw_len:
                 return
             msg_len = int.from_bytes(raw_len, "big")
-            data    = b""
+            if msg_len > MAX_PAYLOAD_BYTES:
+                print(f"[DB-AGENT] Rejected oversized payload: {msg_len} from {addr[0]}")
+                return
+
+            data = b""
             while len(data) < msg_len:
                 chunk = conn.recv(4096)
                 if not chunk:
@@ -270,12 +286,23 @@ class DBAgent:
             if payload.get("type") != "DB_SYNC":
                 return
 
+            table     = payload.get("table", "")
             records   = payload.get("records", [])
             from_node = payload.get("from", "?")
             from_db   = payload.get("db_type", "?")
-            saved     = 0
+
+            if table not in _ALLOWED_SYNC_TABLES:
+                print(f"[DB-AGENT] Rejected unknown sync table: {table!r}")
+                return
+
+            if not isinstance(records, list):
+                return
+
+            saved = 0
             for r in records:
                 try:
+                    if not isinstance(r, dict):
+                        continue
                     normalized = self._normalize_record(r)
                     self.save("sensor_readings", normalized)
                     saved += 1
@@ -296,16 +323,19 @@ class DBAgent:
 
     def _normalize_record(self, record: dict) -> dict:
         return {
-            "record_id":   record.get("record_id", str(uuid.uuid4())),
-            "timestamp":   record.get(
+            "record_id":   str(record.get("record_id", uuid.uuid4())),
+            "timestamp":   str(record.get(
                                "timestamp",
                                datetime.now(timezone.utc).isoformat(),
-                           ),
-            "node_id":     record.get("node_id", "unknown"),
-            "sensor_type": record.get("sensor_type", "unknown"),
-            "value_num":   record.get("value_num"),
-            "value_text":  record.get("value_text"),
-            "raw_json":    record.get("raw_json", "{}"),
+                           )),
+            "node_id":     str(record.get("node_id", "unknown"))[:64],
+            "sensor_type": str(record.get("sensor_type", "unknown"))[:32],
+            "value_num":   record.get("value_num") if isinstance(
+                               record.get("value_num"), (int, float)) else None,
+            "value_text":  str(record.get("value_text", ""))[:256]
+                           if record.get("value_text") else None,
+            "raw_json":    record.get("raw_json", "{}") if isinstance(
+                               record.get("raw_json"), str) else "{}",
             "synced":      1,   # already synced — we received it
         }
 

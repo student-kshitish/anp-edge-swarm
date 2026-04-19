@@ -23,6 +23,7 @@ from ml.task_workers import (
     run_history,
     run_action,
 )
+from config import MAX_PAYLOAD_BYTES
 
 INFERENCE_PORT = 50006
 _MAX_WORKERS   = 10
@@ -81,15 +82,17 @@ def _handle_connection(conn: socket.socket, addr) -> None:
     with conn:
         conn.settimeout(_RECV_TIMEOUT)
         try:
-            # Read length-prefixed request
             raw_len = _recv_exact(conn, 4)
             msg_len = int.from_bytes(raw_len, "big")
+            if msg_len > MAX_PAYLOAD_BYTES:
+                raise ValueError(f"Payload too large: {msg_len} bytes from {addr[0]}")
+
             raw_msg = _recv_exact(conn, msg_len)
 
-            payload    = json.loads(raw_msg.decode("utf-8"))
-            task_type  = payload.get("task_type", "unknown")
+            payload     = json.loads(raw_msg.decode("utf-8"))
+            task_type   = payload.get("task_type", "unknown")
             sensor_data = payload.get("sensor_data", {})
-            window     = payload.get("window", [])
+            window      = payload.get("window", [])
 
             print(f"[INFERENCE] Received {task_type} from {addr[0]}:{addr[1]}")
             t0 = time.perf_counter()
@@ -99,12 +102,10 @@ def _handle_connection(conn: socket.socket, addr) -> None:
             elapsed_ms = (time.perf_counter() - t0) * 1000
             print(f"[INFERENCE] Completed {task_type} in {elapsed_ms:.1f}ms")
 
-            # Send length-prefixed response
             resp = json.dumps(asdict(result)).encode("utf-8")
             conn.sendall(len(resp).to_bytes(4, "big") + resp)
 
         except Exception as exc:
-            # Best-effort error response
             try:
                 err_result = TaskResult(
                     task_type="unknown",
@@ -143,6 +144,8 @@ def _dispatch(task_type: str, payload: dict,
 
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes:
+    if n > MAX_PAYLOAD_BYTES:
+        raise ValueError(f"Requested read size too large: {n}")
     buf = b""
     while len(buf) < n:
         chunk = sock.recv(n - len(buf))

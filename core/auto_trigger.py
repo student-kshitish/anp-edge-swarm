@@ -7,9 +7,7 @@ import threading
 import time
 from agent_factory.factory import AgentFactory
 from core.agent_registry import get_agent_for
-
-TRIGGER_INTERVAL = 5   # seconds between peer checks
-MIN_READINGS     = 3   # minimum readings before triggering ML
+from config import TRIGGER_INTERVAL, MIN_READINGS
 
 
 class AutoTrigger:
@@ -39,20 +37,21 @@ class AutoTrigger:
     def _watch_loop(self):
         while self.running:
             try:
-                peers = self.get_peers()
+                # Snapshot both old and new state atomically so a node that
+                # joins and leaves within one tick doesn't generate ghost events.
+                current_peers = self.get_peers()
+                previous_ids  = set(self.known_peers.keys())
+                current_ids   = set(current_peers.keys())
 
-                for peer_id, peer_info in peers.items():
-                    if peer_id not in self.known_peers:
-                        self.known_peers[peer_id] = peer_info
-                        print(f"[AUTO] New device joined: {peer_id[:12]}")
-                        self._on_device_join(peer_id, peer_info)
+                for peer_id in current_ids - previous_ids:
+                    self.known_peers[peer_id] = current_peers[peer_id]
+                    print(f"[AUTO] New device joined: {peer_id[:12]}")
+                    self._on_device_join(peer_id, current_peers[peer_id])
 
-                # Check for devices that left
-                for peer_id in list(self.known_peers.keys()):
-                    if peer_id not in peers:
-                        print(f"[AUTO] Device left: {peer_id[:12]}")
-                        self._on_device_leave(peer_id)
-                        del self.known_peers[peer_id]
+                for peer_id in previous_ids - current_ids:
+                    print(f"[AUTO] Device left: {peer_id[:12]}")
+                    self._on_device_leave(peer_id)
+                    del self.known_peers[peer_id]
 
             except Exception as e:
                 print(f"[AUTO] Watch error: {e}")

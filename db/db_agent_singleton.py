@@ -9,21 +9,27 @@ Usage:
     db = init_db(get_peers_fn)  # (re-)create with a known-peers callback
 """
 
+import threading
+
 from db.db_agent import DBAgent
 
 _agent: DBAgent = None
+_lock = threading.Lock()
 
 
 def get_db(get_peers_fn=None) -> DBAgent:
     """Return the shared DBAgent, creating it with SQLite on first call."""
     global _agent
     if _agent is None:
-        _agent = DBAgent(get_peers_fn=get_peers_fn)
+        with _lock:
+            if _agent is None:  # double-checked locking
+                _agent = DBAgent(get_peers_fn=get_peers_fn)
     return _agent
 
 
 def init_db(get_peers_fn=None) -> DBAgent:
     """(Re-)initialise the shared DBAgent. Call once at startup."""
     global _agent
-    _agent = DBAgent(get_peers_fn=get_peers_fn)
+    with _lock:
+        _agent = DBAgent(get_peers_fn=get_peers_fn)
     return _agent

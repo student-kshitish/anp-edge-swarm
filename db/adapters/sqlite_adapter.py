@@ -18,6 +18,16 @@ from datetime import datetime, timezone
 
 from db.adapters.base import BaseDBAdapter
 
+_ALLOWED_TABLES = frozenset({
+    "sensor_readings", "work_orders", "predictions",
+    "peers", "sync_log", "telemetry_events",
+})
+
+
+def _check_table(table: str) -> None:
+    if table not in _ALLOWED_TABLES:
+        raise ValueError(f"Unknown table: {table!r}")
+
 
 class SQLiteAdapter(BaseDBAdapter):
 
@@ -77,12 +87,15 @@ class SQLiteAdapter(BaseDBAdapter):
         print(f"[DB] SQLite initialized: {self.db_path}")
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        # Each connection is created and owned by one thread; the lock in
+        # callers enforces single-threaded access, so check_same_thread=True.
+        conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
 
     def save(self, table: str, record: dict) -> str:
+        _check_table(table)
         record_id = record.get("record_id", str(uuid.uuid4()))
         record    = dict(record)          # don't mutate caller's dict
         record["record_id"] = record_id
@@ -121,13 +134,14 @@ class SQLiteAdapter(BaseDBAdapter):
                         ),
                     )
                     conn.commit()
-                except Exception:
-                    pass   # table schema mismatch — silently skip
+                except Exception as e:
+                    print(f"[DB] Save failed for {table}: {e}")
             conn.close()
         return record_id
 
     def fetch(self, table: str, filters: dict = None,
               limit: int = 100) -> list:
+        _check_table(table)
         with self._lock:
             conn = self._conn()
             try:
@@ -152,6 +166,7 @@ class SQLiteAdapter(BaseDBAdapter):
 
     def update(self, table: str, record_id: str,
                data: dict) -> bool:
+        _check_table(table)
         with self._lock:
             conn = self._conn()
             try:
@@ -167,6 +182,7 @@ class SQLiteAdapter(BaseDBAdapter):
         return True
 
     def delete(self, table: str, record_id: str) -> bool:
+        _check_table(table)
         with self._lock:
             conn = self._conn()
             try:
@@ -181,6 +197,7 @@ class SQLiteAdapter(BaseDBAdapter):
         return True
 
     def count(self, table: str) -> int:
+        _check_table(table)
         with self._lock:
             conn = self._conn()
             try:

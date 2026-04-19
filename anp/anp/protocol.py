@@ -11,7 +11,12 @@ import uuid
 from enum import Enum
 from typing import Optional
 
-ANP_VERSION = "1.0"
+PROTOCOL_VERSION = "1.0.0"
+MIN_COMPATIBLE   = "1.0.0"
+MAX_COMPATIBLE   = "1.99.99"
+
+# Keep ANP_VERSION as an alias so existing callers don't break.
+ANP_VERSION = PROTOCOL_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -38,9 +43,10 @@ class MessageType(str, Enum):
     ACTION_CONFIRM = "ACTION_CONFIRM"
 
     # System
-    HEARTBEAT = "HEARTBEAT"
-    DB_SYNC   = "DB_SYNC"
-    INTENT    = "INTENT"
+    HEARTBEAT          = "HEARTBEAT"
+    DB_SYNC            = "DB_SYNC"
+    INTENT             = "INTENT"
+    VERSION_HANDSHAKE  = "VERSION_HANDSHAKE"
 
 
 class Priority(str, Enum):
@@ -51,6 +57,33 @@ class Priority(str, Enum):
 
 
 # ---------------------------------------------------------------------------
+# Version helpers
+# ---------------------------------------------------------------------------
+
+def compare_versions(v1: str, v2: str) -> int:
+    """Return -1, 0, or 1 as v1 < v2, v1 == v2, or v1 > v2."""
+    p1 = [int(x) for x in v1.split(".")]
+    p2 = [int(x) for x in v2.split(".")]
+    for a, b in zip(p1, p2):
+        if a < b:
+            return -1
+        if a > b:
+            return 1
+    return 0
+
+
+def is_compatible_version(version: str) -> bool:
+    try:
+        if compare_versions(version, MIN_COMPATIBLE) < 0:
+            return False
+        if compare_versions(version, MAX_COMPATIBLE) > 0:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Core builder
 # ---------------------------------------------------------------------------
 
@@ -58,24 +91,25 @@ def build_message(
     msg_type:    MessageType,
     payload:     dict,
     sender_id:   str,
-    receiver_id: str            = "broadcast",
-    priority:    Priority       = Priority.MEDIUM,
-    reply_to:    Optional[str]  = None,
-    task_id:     Optional[str]  = None,
+    receiver_id: str           = "broadcast",
+    priority:    Priority      = Priority.MEDIUM,
+    reply_to:    Optional[str] = None,
+    task_id:     Optional[str] = None,
 ) -> dict:
     """Construct a fully-formed ANP envelope."""
     return {
-        "anp_version": ANP_VERSION,
-        "msg_id":      str(uuid.uuid4()),
-        "msg_type":    msg_type.value,
-        "sender_id":   sender_id,
-        "receiver_id": receiver_id,
-        "timestamp":   time.time(),
-        "priority":    priority.value,
-        "reply_to":    reply_to,
-        "task_id":     task_id or str(uuid.uuid4()),
-        "payload":     payload,
-        "signature":   None,  # reserved for future auth layer
+        "anp_version":    PROTOCOL_VERSION,
+        "min_compatible": MIN_COMPATIBLE,
+        "msg_id":         str(uuid.uuid4()),
+        "msg_type":       msg_type.value,
+        "sender_id":      sender_id,
+        "receiver_id":    receiver_id,
+        "timestamp":      time.time(),
+        "priority":       priority.value,
+        "reply_to":       reply_to,
+        "task_id":        task_id or str(uuid.uuid4()),
+        "payload":        payload,
+        "signature":      None,  # reserved for future auth layer
     }
 
 
@@ -196,6 +230,47 @@ def build_action_request(
 
 
 # ---------------------------------------------------------------------------
+# Version handshake builders
+# ---------------------------------------------------------------------------
+
+def build_version_handshake(sender_id: str) -> dict:
+    return {
+        "type":           "VERSION_HANDSHAKE",
+        "anp_version":    PROTOCOL_VERSION,
+        "min_compatible": MIN_COMPATIBLE,
+        "max_compatible": MAX_COMPATIBLE,
+        "sender_id":      sender_id,
+        "timestamp":      time.time(),
+    }
+
+
+def validate_peer_version(peer_msg: dict) -> dict:
+    peer_version = peer_msg.get("anp_version", "")
+    peer_min     = peer_msg.get("min_compatible", "")
+
+    if not peer_version:
+        return {"compatible": False, "reason": "missing version"}
+
+    if peer_min and compare_versions(PROTOCOL_VERSION, peer_min) < 0:
+        return {
+            "compatible": False,
+            "reason": f"our version {PROTOCOL_VERSION} too old for peer",
+        }
+
+    if not is_compatible_version(peer_version):
+        return {
+            "compatible": False,
+            "reason": f"peer version {peer_version} incompatible",
+        }
+
+    return {
+        "compatible":   True,
+        "peer_version": peer_version,
+        "our_version":  PROTOCOL_VERSION,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
 
@@ -214,8 +289,9 @@ def validate_message(msg: dict) -> tuple[bool, str]:
         if field not in msg:
             return False, f"Missing required field: {field}"
 
-    if msg["anp_version"] != ANP_VERSION:
-        return False, f"Version mismatch: {msg['anp_version']} != {ANP_VERSION}"
+    version = msg.get("anp_version", "")
+    if not is_compatible_version(version):
+        return False, f"Incompatible version: {version}"
 
     try:
         MessageType(msg["msg_type"])

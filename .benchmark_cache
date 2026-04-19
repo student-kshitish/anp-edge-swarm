@@ -1,11 +1,11 @@
 {
-  "cpu_score": 65.83,
-  "mem_score": 60.92,
-  "llm_tps": 2.39,
+  "cpu_score": 82.82,
+  "mem_score": 81.09,
+  "llm_tps": 4.43,
   "llm_available": true,
-  "disk_score": 99.76,
-  "net_latency_ms": 49.0,
-  "node_id": "a9a4102bcbf08794bb92d073cb15b0219078e1a6",
-  "timestamp": 1776491521.9974508,
-  "composite": 48.64
+  "disk_score": 99.88,
+  "net_latency_ms": 112.0,
+  "node_id": "b7f25c6598246950f304621a0d813b30c47b2418",
+  "timestamp": 1776583575.6005201,
+  "composite": 58.8
 }

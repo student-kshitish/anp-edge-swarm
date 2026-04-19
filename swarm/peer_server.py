@@ -24,6 +24,7 @@ import time
 import logging
 
 from swarm.capability import get_capabilities
+from config import MAX_PAYLOAD_BYTES
 
 logger = logging.getLogger(__name__)
 
@@ -39,18 +40,6 @@ _started = False
 # ------------------------------------------------------------------ #
 
 def _add_peer(node_id: str, caps: dict, addr: str) -> None:
-    """
-    Store peer in a format compatible with TaskDecomposer.
-
-    Entry format (FIX 6):
-    {
-      "node_id":   "...",
-      "caps":      {"ram_gb": x, "cpu_cores": x, "roles": [...], "os": "..."},
-      "addr":      "ip_address",
-      "roles":     [...],
-      "last_seen": timestamp
-    }
-    """
     entry = {
         "node_id":   node_id,
         "caps":      {
@@ -66,7 +55,6 @@ def _add_peer(node_id: str, caps: dict, addr: str) -> None:
     with _lock:
         _known_nodes[node_id] = entry
 
-    # Mirror into dht_discovery.known_peers so task_distributor can see it
     try:
         from swarm.dht_discovery import register_peer
         register_peer(node_id, entry)
@@ -82,13 +70,17 @@ def _handle_client(conn: socket.socket, addr: tuple) -> None:
         conn.sendall(json.dumps(my_caps).encode())
         conn.shutdown(socket.SHUT_WR)
 
-        # Step 2: read client caps (they send after reading ours)
+        # Step 2: read client caps with size guard
         conn.settimeout(5.0)
         chunks = []
+        total  = 0
         while True:
             chunk = conn.recv(4096)
             if not chunk:
                 break
+            total += len(chunk)
+            if total > MAX_PAYLOAD_BYTES:
+                raise ValueError(f"Peer caps payload too large from {addr[0]}")
             chunks.append(chunk)
 
         data = b"".join(chunks)
@@ -98,7 +90,7 @@ def _handle_client(conn: socket.socket, addr: tuple) -> None:
             if node_id:
                 _add_peer(node_id, their_caps, addr[0])
                 print(f"[PEER] Connected to {node_id} at {addr[0]}", flush=True)
-    except (OSError, json.JSONDecodeError) as e:
+    except (OSError, json.JSONDecodeError, ValueError) as e:
         logger.debug("[PEER] Client handler error from %s: %s", addr[0], e)
     finally:
         conn.close()

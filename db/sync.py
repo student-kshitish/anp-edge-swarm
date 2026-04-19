@@ -13,6 +13,7 @@ import time
 from db.query import get_unsynced
 from db.store import save_sensor_reading, save_prediction, save_work_order, mark_synced
 from swarm.node_identity import get_node_id
+from config import MAX_PAYLOAD_BYTES
 
 SYNC_PORT     = 50011
 SYNC_INTERVAL = 30
@@ -71,19 +72,27 @@ class DBSync:
             "records": unsynced,
         }).encode()
 
+        if len(payload) > MAX_PAYLOAD_BYTES:
+            print(f"[DB-SYNC] Payload too large to send: {len(payload)} bytes")
+            return
+
+        sent = False
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(5)
         try:
             sock.connect((ip, SYNC_PORT))
             sock.sendall(len(payload).to_bytes(4, "big") + payload)
+            sent = True
+        except Exception as e:
+            print(f"[DB-SYNC] Send to {ip} failed: {e}")
         finally:
             sock.close()
 
-        for r in unsynced:
-            if r.get("record_id"):
-                mark_synced("sensor_readings", r["record_id"])
-
-        print(f"[DB-SYNC] Sent {len(unsynced)} records to {ip}")
+        if sent:
+            for r in unsynced:
+                if r.get("record_id"):
+                    mark_synced("sensor_readings", r["record_id"])
+            print(f"[DB-SYNC] Sent {len(unsynced)} records to {ip}")
 
     # ------------------------------------------------------------------ #
     # Server side — receive records pushed by peers
@@ -108,18 +117,23 @@ class DBSync:
 
     def _handle_sync(self, conn: socket.socket, addr: tuple):
         try:
+            conn.settimeout(10)
             raw_len = conn.recv(4)
             if not raw_len:
                 return
             msg_len = int.from_bytes(raw_len, "big")
-            data    = b""
+            if msg_len > MAX_PAYLOAD_BYTES:
+                print(f"[DB-SYNC] Rejected oversized payload: {msg_len} bytes from {addr[0]}")
+                return
+
+            data = b""
             while len(data) < msg_len:
                 chunk = conn.recv(4096)
                 if not chunk:
                     break
                 data += chunk
 
-            payload   = json.loads(data.decode())
+            payload = json.loads(data.decode())
             if payload.get("type") != "DB_SYNC":
                 return
 
@@ -128,13 +142,20 @@ class DBSync:
             from_node = payload.get("from", "unknown")
             saved     = 0
 
+            # Only accept the known-safe table name
+            if table != "sensor_readings":
+                print(f"[DB-SYNC] Rejected unknown table: {table!r}")
+                return
+
             for r in records:
                 try:
+                    if not isinstance(r, dict):
+                        continue
                     if table == "sensor_readings":
                         save_sensor_reading(
-                            r["sensor_type"],
-                            json.loads(r["raw_json"]),
-                            r["node_id"],
+                            str(r.get("sensor_type", "unknown")),
+                            json.loads(r["raw_json"]) if isinstance(r.get("raw_json"), str) else {},
+                            str(r.get("node_id", "unknown")),
                         )
                         saved += 1
                 except Exception:

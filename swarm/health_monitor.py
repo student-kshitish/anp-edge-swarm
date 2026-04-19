@@ -2,26 +2,35 @@
 swarm/health_monitor.py — Self-healing network monitor.
 
 Runs a background thread that pings every known peer on a fixed interval.
-When a node accumulates MAX_RETRIES consecutive ping failures it is declared
-dead and all of its pending tasks are reassigned to surviving peers.
+Hysteresis logic prevents false positives from transient failures:
+  - Flapping nodes (rapid alive/dead changes) are quarantined
+  - Reconnecting nodes must pass handshake validation
+  - Exponential backoff before declaring a node dead
 """
 
 import threading
 import time
+
+MIN_STABLE_PERIOD  = 30   # seconds a node must be stable before trusted
+FLAPPING_THRESHOLD = 5    # state changes in 60s window → flapping
+BACKOFF_BASE       = 2
+MAX_BACKOFF        = 60
 
 
 class HealthMonitor:
     """Monitors peer health and orchestrates task reassignment on node failure."""
 
     def __init__(self, get_peers_fn, task_distributor):
-        self.get_peers     = get_peers_fn
-        self.distributor   = task_distributor
-        self.node_health   = {}
-        self.running       = False
+        self.get_peers      = get_peers_fn
+        self.distributor    = task_distributor
+        self.node_health    = {}
+        self.running        = False
+        self.state_changes  = {}   # node_id -> list of (timestamp, state)
+        self.rejoin_pending = {}   # node_id -> True when awaiting handshake
 
-        self.PING_INTERVAL  = 10   # seconds between full sweep
-        self.DEAD_THRESHOLD = 30   # seconds of silence → dead
-        self.MAX_RETRIES    = 3    # consecutive failures → dead
+        self.PING_INTERVAL  = 10
+        self.DEAD_THRESHOLD = 30
+        self.MAX_RETRIES    = 3
 
         self._lock = threading.Lock()
 
@@ -40,6 +49,37 @@ class HealthMonitor:
 
     def stop(self):
         self.running = False
+
+    # ------------------------------------------------------------------
+    # Hysteresis helpers
+    # ------------------------------------------------------------------
+
+    def _is_flapping(self, node_id: str) -> bool:
+        changes = self.state_changes.get(node_id, [])
+        now     = time.time()
+        recent  = [c for c in changes if now - c[0] < 60]
+        return len(recent) >= FLAPPING_THRESHOLD
+
+    def _record_state_change(self, node_id: str, state: str):
+        if node_id not in self.state_changes:
+            self.state_changes[node_id] = []
+        self.state_changes[node_id].append((time.time(), state))
+        # Keep only the 20 most recent entries
+        if len(self.state_changes[node_id]) > 20:
+            self.state_changes[node_id] = self.state_changes[node_id][-20:]
+
+    def _get_backoff(self, node_id: str) -> int:
+        h    = self.node_health.get(node_id, {})
+        fails = h.get("fail_count", 0)
+        return min(MAX_BACKOFF, BACKOFF_BASE ** fails)
+
+    def _validate_handshake(self, node_id: str) -> bool:
+        try:
+            from security.crypto import NodeSecurity
+            sec = NodeSecurity()
+            return sec.is_trusted(node_id)
+        except Exception:
+            return True
 
     # ------------------------------------------------------------------
     # Main loop
@@ -81,45 +121,77 @@ class HealthMonitor:
                 h["ping_count"] += 1
 
                 if alive["success"]:
-                    h["status"]      = "alive"
-                    h["last_seen"]   = time.time()
-                    h["fail_count"]  = 0
                     h["response_ms"] = alive["ms"]
+
+                    if h.get("status") == "dead":
+                        self.rejoin_pending[node_id] = True
+                        h["status"] = "reconnecting"
+                        self._record_state_change(node_id, "reconnecting")
+                        print(f"[HEALTH] Node {node_id[:12]} reconnected — "
+                              f"requires handshake validation")
+
+                    elif self.rejoin_pending.get(node_id):
+                        if self._validate_handshake(node_id):
+                            h["status"] = "alive"
+                            h["last_seen"] = time.time()
+                            h["fail_count"] = 0
+                            del self.rejoin_pending[node_id]
+                            self._record_state_change(node_id, "alive")
+                            print(f"[HEALTH] Node {node_id[:12]} validated — "
+                                  f"now fully alive")
+
+                    elif self._is_flapping(node_id):
+                        h["status"] = "flapping"
+                        print(f"[HEALTH] Node {node_id[:12]} is FLAPPING — "
+                              f"not trusted for task assignment")
+
+                    else:
+                        if h.get("status") != "alive":
+                            self._record_state_change(node_id, "alive")
+                        h["status"]     = "alive"
+                        h["last_seen"]  = time.time()
+                        h["fail_count"] = 0
+
                 else:
                     h["fail_count"] += 1
-                    h["status"]      = "degraded"
+                    backoff = self._get_backoff(node_id)
                     print(
                         f"[HEALTH] Node {node_id[:12]} "
-                        f"ping failed ({h['fail_count']}/{self.MAX_RETRIES})"
+                        f"fail #{h['fail_count']} backoff={backoff}s"
                     )
 
                     if h["fail_count"] >= self.MAX_RETRIES:
-                        h["status"] = "dead"
-                        print(f"[HEALTH] !! Node {node_id[:12]} declared DEAD")
-                        self._on_node_dead(node_id, info)
-                        try:
-                            from bus.event_bus import get_event_bus
-                            get_event_bus().publish(
-                                "node.dead",
-                                {
-                                    "node_id":   node_id,
-                                    "last_seen": h["last_seen"],
-                                },
-                                priority="CRITICAL",
-                            )
-                        except Exception:
-                            pass
+                        if h.get("status") != "dead":
+                            h["status"] = "dead"
+                            self._record_state_change(node_id, "dead")
+                            print(f"[HEALTH] !! Node {node_id[:12]} DEAD")
+                            self._on_node_dead(node_id, info)
+                            try:
+                                from bus.event_bus import get_event_bus
+                                get_event_bus().publish(
+                                    "node.dead",
+                                    {
+                                        "node_id":   node_id,
+                                        "last_seen": h["last_seen"],
+                                    },
+                                    priority="CRITICAL",
+                                )
+                            except Exception:
+                                pass
+                    else:
+                        h["status"] = "degraded"
 
             # Detect nodes that stopped appearing in the peer list
-            now = time.time()
+            now       = time.time()
             timed_out = []
             with self._lock:
                 for node_id, h in self.node_health.items():
                     if (
                         now - h["last_seen"] > self.DEAD_THRESHOLD
-                        and h["status"] != "dead"
+                        and h["status"] not in ("dead", "reconnecting")
                     ):
                         h["status"] = "dead"
+                        self._record_state_change(node_id, "dead")
                         timed_out.append((node_id, h["last_seen"]))
                         print(f"[HEALTH] Node {node_id[:12]} timed out")
 
@@ -206,3 +278,10 @@ class HealthMonitor:
                 1 for h in self.node_health.values()
                 if h["status"] == "alive"
             )
+
+    def is_node_trusted(self, node_id: str) -> bool:
+        h      = self.node_health.get(node_id, {})
+        status = h.get("status", "unknown")
+        if status == "alive":
+            return not self._is_flapping(node_id)
+        return False
