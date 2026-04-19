@@ -3,7 +3,7 @@
 **Kshitish Behera**
 Sambalpur University Institute of Information Technology (SUIIT)
 Burla, Sambalpur, Odisha, India
-student-kshitish@github.com
+GitHub: github.com/student-kshitish
 
 ---
 
